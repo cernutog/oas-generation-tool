@@ -1,0 +1,208 @@
+import pandas as pd
+import os
+import difflib
+
+def load_excel_sheet(file_path, sheet_name):
+    """
+    Helper function to load a specific sheet from an Excel file.
+    Includes smart header detection.
+    """
+    try:
+        # First read with no header to find the header row
+        df_raw = pd.read_excel(file_path, sheet_name=sheet_name, header=None)
+        
+        # Search for the header row
+        header_row_idx = -1
+        # Check first 10 rows
+        for idx, row in df_raw.head(10).iterrows():
+            row_str = row.astype(str).str.lower()
+            # Keywords that signify a header row
+            if any(x in row_str.values for x in ['name', 'request parameters', 'parameter', 'path']):
+                 header_row_idx = idx
+                 break
+        
+        if header_row_idx != -1:
+             df = pd.read_excel(file_path, sheet_name=sheet_name, header=header_row_idx)
+        else:
+             # Fallback to default
+             df = pd.read_excel(file_path, sheet_name=sheet_name)
+             
+        df.columns = df.columns.str.strip()
+        return df
+    except ValueError:
+        # Sheet might not exist
+        return None
+    except Exception as e:
+        print(f"Error loading {sheet_name} from {file_path}: {e}")
+        return None
+
+def find_best_match_file(target_name, directory, files_list):
+    """
+    Tries to find the actual file in directory that matches target_name.
+    Handles exact match, case insensitivity, and minor typos.
+    """
+    if not target_name:
+        return None
+    
+    # Normalize target
+    target = target_name.strip()
+    if not target.endswith('.xlsm') and not target.endswith('.xlsx'):
+        target += '.xlsm'
+        
+    # 1. Exact match
+    if target in files_list:
+        return os.path.join(directory, target)
+    
+    # 2. Case insensitive
+    for f in files_list:
+        if f.lower() == target.lower():
+            return os.path.join(directory, f)
+            
+    # 3. Fuzzy match / typo correction
+    # Using difflib to find closest match
+    matches = difflib.get_close_matches(target, files_list, n=1, cutoff=0.6)
+    if matches:
+        print(f"Warning: fuzzy matching '{target_name}' to '{matches[0]}'")
+        return os.path.join(directory, matches[0])
+        
+    return None
+
+def parse_info(df_info):
+    """
+    Parses 'General Description' sheet.
+    Structure: Key, Value.
+    Keys usually: 'info description', 'info version', 'info title'
+    """
+    info = {
+        "title": "API Specification", # Default
+        "version": "1.0.0"
+    }
+    if df_info is not None:
+        # Expecting col 0 to be key, col 1 to be val
+        # Headers might be shifted or named 'General Description'
+        
+        # Iterate through rows
+        for index, row in df_info.iterrows():
+            key = str(row.iloc[0]).strip().lower()
+            val = row.iloc[1]
+            if pd.isna(val): continue
+            
+            if "description" in key:
+                info["description"] = val
+            elif "version" in key:
+                info["version"] = str(val)
+            elif "title" in key:
+                info["title"] = val
+            elif "contact" in key:
+                if "contact" not in info: info["contact"] = {}
+                if "email" in key: info["contact"]["email"] = val
+                if "name" in key: info["contact"]["name"] = val
+
+    return info
+
+def parse_paths_index(df_paths):
+    """
+    Parses the 'Paths' sheet.
+    """
+    operations = []
+    if df_paths is not None:
+        # Print columns to help debugging
+        # print(f"DEBUG Paths cols: {df_paths.columns.tolist()}")
+        
+        # Ensure we locate the correct columns even if named 'Unnamed'
+        # Heuristic: Find which column contains '/v1' to identify Path column
+        path_col = None
+        file_col = None
+        method_col = None
+        
+        # Simple mapping based on known structure or fallback to index
+        # 'Paths' usually contains the path
+        if 'Paths' in df_paths.columns:
+            path_col = 'Paths'
+        elif 'Path' in df_paths.columns:
+            path_col = 'Path'
+            
+        for idx, col in enumerate(df_paths.columns):
+            if 'Excel' in col or 'Unnamed: 0' == col: # First col usually file
+                file_col = col
+            if not path_col and ('Unnamed: 1' == col or 'Paths' in col):
+                path_col = col
+            if 'Method' in col or 'Unnamed: 3' == col:
+                method_col = col
+                
+        # If still None, assume standard layout
+        file_col = file_col or df_paths.columns[0]
+        path_col = path_col or df_paths.columns[1]
+        
+        for _, row in df_paths.iterrows():
+            path_val = row.get(path_col)
+            # Skip empty or header-like rows
+            if not isinstance(path_val, str) or not path_val.startswith('/'):
+                continue
+                
+            op = {
+                "file": row.get(file_col),
+                "path": path_val,
+                "method": row.get("Method") or row.get("Unnamed: 3"),
+                "summary": row.get("Summary") or row.get("Unnamed: 6"),
+                "description": row.get("Description") or row.get("Unnamed: 4"),
+                "operationId": row.get("OperationId") or row.get("Unnamed: 7"),
+                "tags": row.get("Tag") or row.get("Unnamed: 5"),
+                "extensions": row.get("Custom Extensions") or row.get("Unnamed: 8")
+            }
+            operations.append(op)
+    return operations
+
+def parse_tags(df_tags):
+    """
+    Parses 'Tags' sheet.
+    Expected columns: Name, Description, ExternalDocs...
+    """
+    tags = []
+    if df_tags is not None:
+        for _, row in df_tags.iterrows():
+            tag = {
+                "name": row.get("Name"),
+                "description": row.get("Description")
+            }
+            if tag["name"]:
+                tags.append(tag)
+    return tags
+
+def parse_components(file_path):
+    """
+    Parses global components from sheets: Parameters, Headers, Schemas, Responses.
+    """
+    components = {
+        "parameters": load_excel_sheet(file_path, "Parameters"),
+        "headers": load_excel_sheet(file_path, "Headers"),
+        "schemas": load_excel_sheet(file_path, "Schemas"),
+        "responses": load_excel_sheet(file_path, "Responses")
+    }
+    return components
+
+def parse_operation_file(file_path):
+    """
+    Parses a single operation Excel file.
+    """
+    if not os.path.exists(file_path):
+        return None
+    
+    op_details = {}
+    
+    # Load Sheets
+    op_details["parameters"] = load_excel_sheet(file_path, "Parameters")
+    op_details["body"] = load_excel_sheet(file_path, "Body")
+    op_details["body_examples"] = load_excel_sheet(file_path, "Body Example")
+    
+    # Responses
+    try:
+        xl = pd.ExcelFile(file_path)
+        response_sheets = [s for s in xl.sheet_names if s.isdigit()]
+        op_details["responses"] = {}
+        for code in response_sheets:
+            op_details["responses"][code] = load_excel_sheet(file_path, code)
+    except Exception:
+        pass
+        
+    return op_details
