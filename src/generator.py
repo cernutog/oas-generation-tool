@@ -258,8 +258,20 @@ class OASGenerator:
         if not ex_str: return None
         try:
              ex_str = str(ex_str).strip()
+             # Fix single quotes in JSON-like strings (common in Python dumps or incorrect Excel format)
              if ex_str.startswith("{") or ex_str.startswith("["):
-                  return json.loads(ex_str)
+                  # Replace single quotes with double quotes if they look like keys/values
+                  # Simple heuristic: replace ' with " if it is likely a delimiter
+                  # But be careful about apostrophes in text.
+                  # Safer: try json.loads first. If fail, substitute and try again?
+                  try:
+                      return json.loads(ex_str)
+                  except:
+                      # Try replacing single with double
+                      fixed = ex_str.replace("'", '"')
+                      # Replace None with null, False with false, True with true if needed?
+                      fixed = fixed.replace("None", "null").replace("False", "false").replace("True", "true")
+                      return json.loads(fixed)
              else:
                   return yaml.safe_load(ex_str)
         except:
@@ -696,15 +708,7 @@ class OASGenerator:
 
         ex = self._get_col_value(row, ["Example", "Examples"])
         if pd.notna(ex): 
-            # Try to parse complex examples (JSON/YAML)
-            try:
-                ex_str = str(ex).strip()
-                if ex_str.startswith("{") or ex_str.startswith("["):
-                    schema["example"] = json.loads(ex_str)
-                else:
-                     schema["example"] = ex
-            except:
-                schema["example"] = ex
+            schema["example"] = self._parse_example_string(ex)
         
         # Enums
         enum_val = self._get_col_value(row, ["Allowed value", "Allowed values"])
@@ -718,8 +722,8 @@ class OASGenerator:
         pattern = self._get_col_value(row, ["PatternEba", "Pattern", "Regex"])
         if pd.notna(pattern): schema["pattern"] = str(pattern)
 
-        min_val = self._get_col_value(row, ["Min\nValue/Length/Item", "Min Value/Length/Item", "Min"])
-        max_val = self._get_col_value(row, ["Max\nValue/Length/Item", "Max Value/Length/Item", "Max"])
+        min_val = self._get_col_value(row, ["Min\nValue/Length/Item", "Min  \nValue/Length/Item", "Min Value/Length/Item", "Min"])
+        max_val = self._get_col_value(row, ["Max\nValue/Length/Item", "Max  \nValue/Length/Item", "Max Value/Length/Item", "Max"])
         
         if pd.notna(min_val):
             # Infer if it's minLength, minimum, or minItems property based on type
