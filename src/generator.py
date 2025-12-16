@@ -550,32 +550,57 @@ class OASGenerator:
 
         # Responses (Global)
         if global_components.get("responses") is not None:
-             # Global responses are usually 1 row per response in the sheet?
-             # Or multiple rows per response (complex)?
-             # Assuming flattening like paths: group by Name
              df_resp = global_components["responses"]
              df_resp.columns = df_resp.columns.str.strip()
              
-             # Group by 'Name'
-             # resp_groups = df_resp.groupby(...) -> CRASHES
+             # Convert to list of dicts for easier processing
+             all_rows = df_resp.to_dict('records')
              
-             current_name = None
-             current_rows = []
+             # 1. Build Adjacency Map (Parent -> [Children])
+             # And identify Roots
+             adjacency = {}
+             roots = []
              
-             for idx, row in df_resp.iterrows():
-                 name = self._get_name(row)
-                 if pd.notna(name):
-                     if current_name and current_name != name:
-                         # Build previous
-                         self.oas["components"]["responses"][str(current_name)] = self._build_single_response(pd.DataFrame(current_rows))
-                         current_rows = []
-                     current_name = name
+             for row in all_rows:
+                 name = str(self._get_name(row)).strip()
+                 parent = self._get_parent(row)
+                 # Handle NaN parent
+                 parent_str = str(parent).strip() if pd.notna(parent) else ""
                  
-                 if current_name:
-                     current_rows.append(row)
-                     
-             if current_name and current_rows:
-                 self.oas["components"]["responses"][str(current_name)] = self._build_single_response(pd.DataFrame(current_rows))
+                 # Check if Root
+                 # Root criteria: Type='response' OR Parent is empty
+                 type_val = str(self._get_type(row)).strip().lower()
+                 if type_val == 'response' or parent_str == "":
+                     roots.append(row)
+                 else:
+                     # It's a child
+                     if parent_str not in adjacency:
+                         adjacency[parent_str] = []
+                     adjacency[parent_str].append(row)
+
+             # 2. Process each Root
+             for root in roots:
+                 root_name = str(self._get_name(root)).strip()
+                 if not root_name or root_name.lower() == 'nan': continue
+                 
+                 # Gather all descendants recursively
+                 collected_rows = [root]
+                 
+                 def gather_descendants(current_name):
+                     if current_name in adjacency:
+                         children = adjacency[current_name]
+                         for child in children:
+                             collected_rows.append(child)
+                             child_name = str(self._get_name(child)).strip()
+                             # Recursion
+                             if child_name and child_name != 'nan':
+                                 gather_descendants(child_name)
+                 
+                 gather_descendants(root_name)
+                 
+                 # Build Response Object from collected rows
+                 response_df = pd.DataFrame(collected_rows)
+                 self.oas["components"]["responses"][str(root_name)] = self._build_single_response(response_df)
 
         # Headers (Global)
         if global_components.get("headers") is not None:

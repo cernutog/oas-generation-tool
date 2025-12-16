@@ -19,7 +19,7 @@ compare_*
 list_*
 
 # Test scripts in root (should be in tests/)
-test_*.py
+/test_*.py
 
 # Reports and logs
 *.txt
