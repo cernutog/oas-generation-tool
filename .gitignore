@@ -30,3 +30,5 @@ discrepancies*
 # Generated output directory
 API Templates/generated/
 API Templates/~*
+
+!project rules/

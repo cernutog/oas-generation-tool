@@ -632,12 +632,37 @@ class OASGenerator:
         with open(log_file, "a", encoding="utf-8") as f:
             f.write(f"[{timestamp}] [MISSING DATA] {msg}\n")
             
+    def _find_references(self, target_name):
+        """
+        Scans the OAS structure to find where a specific component is referenced.
+        Returns a list of 'Breadcrumbs' strings.
+        """
+        refs = []
+        target_ref_lower = f"#/components/schemas/{target_name}".lower()
+        
+        def scan_dict(d, path_prefix=""):
+            for k, v in d.items():
+                current_path = f"{path_prefix}.{k}" if path_prefix else k
+                if isinstance(v, dict):
+                    scan_dict(v, current_path)
+                elif isinstance(v, list):
+                    for idx, item in enumerate(v):
+                         if isinstance(item, dict):
+                              scan_dict(item, f"{current_path}[{idx}]")
+                elif isinstance(v, str):
+                    if target_ref_lower in v.lower():
+                        refs.append(f"{current_path} (ref: {v})")
+        
+        scan_dict(self.oas)
+        # Deduplicate
+        return list(set(refs))
+
     def _check_and_report_deficiencies(self):
         """
         Checks if expected standard schemas are present.
         If not, logs them to a report file to be corrected in Excel.
         """
-        required_schemas = ["DateTime", "dateTime", "name", "identification"]
+        required_schemas = ["DateTime"]
         schemas = self.oas["components"]["schemas"]
         
         missing = []
@@ -646,10 +671,20 @@ class OASGenerator:
                 missing.append(req)
                 
         if missing:
-            msg = f"The following schemas are referenced but missing from the source Excel files: {', '.join(missing)}. Please add them to the 'Schemas' or 'Parameters' sheet."
-            print(f"\n[WARNING] {msg}")
+            print(f"\n[WARNING] Found {len(missing)} missing schemas. analyzing references...")
+            full_msg = "The following schemas are referenced but missing from the source Excel files:\n"
+            
+            for m in missing:
+                refs = self._find_references(m)
+                ref_str = "\n    - ".join(refs[:5]) # Limit to 5 examples
+                if len(refs) > 5: ref_str += f"\n    - ... and {len(refs)-5} more"
+                if not refs: ref_str = " (No explicit references found in generated output, possibly implicit or lost)"
+                
+                full_msg += f"\n  * {m}:\n    - Referenced in: {ref_str}"
+                
+            print(full_msg)
             print(f"See generation_deficiencies.log for details.\n")
-            self._log_deficiency(msg)
+            self._log_deficiency(full_msg)
 
     def _build_schema_group(self, df):
         """
