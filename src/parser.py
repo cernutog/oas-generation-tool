@@ -16,13 +16,30 @@ def load_excel_sheet(file_path, sheet_name):
         # Check first 10 rows
         for idx, row in df_raw.head(10).iterrows():
             row_str = row.astype(str).str.lower()
-            # Keywords that signify a header row
-            if any(x in row_str.values for x in ['name', 'request parameters', 'parameter', 'path']):
+            # Count how many "header-like" keywords are in this row
+            # A true header row should have multiple column names
+            header_keywords = ['name', 'description', 'type', 'in', 'mandatory', 'required']
+            matches = sum(1 for keyword in header_keywords if keyword in row_str.values)
+            
+            # If we find multiple header keywords, this is likely the header row
+            if matches >= 2:
                  header_row_idx = idx
                  break
         
         if header_row_idx != -1:
              df = pd.read_excel(file_path, sheet_name=sheet_name, header=header_row_idx)
+             
+             # Capture Metadata from rows above header (specifically for Response sheets)
+             if header_row_idx > 0:
+                 try:
+                     # heuristic for Response sheet: A1='Response', C1=Description
+                     first_cell = str(df_raw.iloc[0, 0]).strip()
+                     if first_cell == 'Response' and df_raw.shape[1] > 2:
+                         desc = df_raw.iloc[0, 2]
+                         if pd.notna(desc):
+                             df.attrs['response_description'] = str(desc).strip()
+                 except Exception:
+                     pass
         else:
              # Fallback to default
              df = pd.read_excel(file_path, sheet_name=sheet_name)

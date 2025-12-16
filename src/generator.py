@@ -80,29 +80,32 @@ class OASGenerator:
             if file_ref in operations_details:
                 details = operations_details[file_ref]
                 
+                # Extract Body Examples Global for this Op
+                body_examples = {}
+                if details.get("body_examples") is not None:
+                    body_examples_df = details.get("body_examples")
+                    # Convert DF to dict {Name: Body}
+                    # Assuming col 0 is Name, col 1 is Body
+                    for _, row in body_examples_df.iterrows():
+                        ex_name = str(row.iloc[0]).strip()
+                        ex_body = row.iloc[1]
+                        if pd.notna(ex_body):
+                            # Detect if body is typical "request" example?
+                            # For now just store by name
+                            body_examples[ex_name] = ex_body
+
                 # Parameters
                 if details.get("parameters") is not None:
                     op_obj["parameters"] = self._build_parameters(details["parameters"])
 
                 # Request Body
                 if details.get("body") is not None:
-                    req_body = self._build_request_body(details["body"])
+                    req_body = self._build_request_body(details["body"], body_examples)
                     if req_body:
                         op_obj["requestBody"] = req_body
 
                 # Responses
                 if details.get("responses"):
-                    body_examples_df = details.get("body_examples")
-                    body_examples = {}
-                    if body_examples_df is not None:
-                        # Convert DF to dict {Name: Body}
-                        # Assuming col 0 is Name, col 1 is Body
-                        for _, row in body_examples_df.iterrows():
-                            ex_name = str(row.iloc[0]).strip()
-                            ex_body = row.iloc[1]
-                            if pd.notna(ex_body):
-                                body_examples[ex_name] = ex_body
-
                     for code, df_resp in details["responses"].items():
                         op_obj["responses"][str(code)] = self._build_single_response(df_resp, body_examples, str(code))
             
@@ -133,10 +136,39 @@ class OASGenerator:
             name = self._get_name(row)
             if pd.isna(name): continue
             
+            type_val = str(self._get_type(row)).lower().strip() if pd.notna(self._get_type(row)) else ""
+            schema_name = self._get_schema_name(row)
+            
+            # If Type=parameter/parameters and Schema Name is present, create a reference
+            if type_val in ['parameter', 'parameters'] and pd.notna(schema_name):
+                # Check if there's a description
+                desc = self._get_description(row)
+                ref_path = f"#/components/parameters/{name}"
+                
+                if pd.notna(desc):
+                    # Reference with description - use allOf workaround for OAS 3.0
+                    is_oas30 = self.version.startswith("3.0")
+                    if is_oas30:
+                        param = {
+                            "allOf": [{"$ref": ref_path}],
+                            "description": str(desc)
+                        }
+                    else:
+                        # OAS 3.1 allows $ref and description at same level
+                        param = {
+                            "$ref": ref_path,
+                            "description": str(desc)
+                        }
+                else:
+                    # Just the reference
+                    param = {"$ref": ref_path}
+                
+                params.append(param)
+                continue
+            
             in_loc = self._get_col_value(row, ["In", "Location"])
             if pd.isna(in_loc): 
                  # Default to header for 'parameter' type if missing
-                 type_val = str(self._get_type(row)).lower().strip()
                  if type_val == 'parameter':
                       in_loc = 'header'
                  else:
@@ -152,7 +184,7 @@ class OASGenerator:
             params.append(param)
         return params
 
-    def _build_request_body(self, df):
+    def _build_request_body(self, df, body_examples=None):
         if df is None or df.empty: return None
         
         # DEBUG
@@ -160,7 +192,7 @@ class OASGenerator:
         
         # The structure usually has the content-type as a root or row 0
         # Let's find the content type. 
-        # Heuristic: verify if 'application/json' is in Name column
+        # Check if 'application/json' is in Name column
         content_type = "application/json" # Default
         
         # We process the rows to build the schema
@@ -178,7 +210,11 @@ class OASGenerator:
         return {
             "content": {
                 content_type: {
-                    "schema": schema
+                    "schema": schema,
+                    **({"examples": {
+                        k: {"value": self._parse_example_string(v)} 
+                        for k, v in body_examples.items()
+                    }} if body_examples else {})
                 }
             }
         }
@@ -214,35 +250,89 @@ class OASGenerator:
     def _get_description(self, row):
         return self._get_col_value(row, ["Description", "Desc", "Description "])
 
+    def _parse_example_string(self, ex_str):
+        """
+        Parses a string as JSON or YAML.
+        """
+        if not ex_str: return None
+        try:
+             ex_str = str(ex_str).strip()
+             if ex_str.startswith("{") or ex_str.startswith("["):
+                  return json.loads(ex_str)
+             else:
+                  return yaml.safe_load(ex_str)
+        except:
+             return ex_str
+
     def _build_single_response(self, df, body_examples=None, code=""):
         if df is None or df.empty: return {"description": "Response"}
         
         # 1. Identify Root Info
         root_row = None
         header_rows = []
+        content_rows = [] # Track content rows
+        example_rows = [] # Track example definition rows
         schema_rows_mask = []
+        example_names = set()  # Names that are examples, not schema properties
         
+        # First pass: identify headers, content, and example markers
         for idx, row in df.iterrows():
              r_type = str(self._get_type(row)).strip().lower()
-             if r_type == 'header':
+             section = self._get_col_value(row, ["Section"])
+             section_lower = str(section).strip().lower() if pd.notna(section) else ""
+             
+             name = self._get_name(row)
+             desc = self._get_description(row)
+             parent = self._get_parent(row)
+             
+             if r_type == 'header' or section_lower == 'header' or section_lower == 'headers':
                  header_rows.append(row)
                  schema_rows_mask.append(False)
+             elif section_lower == 'content':
+                 content_rows.append(row)
+                 schema_rows_mask.append(True) # Content rows act as roots for schema building
+                 if root_row is None: root_row = row # Fallback if content is first
+             elif section_lower in ['example', 'examples']:
+                 example_rows.append(row)
+                 example_name = self._get_name(row)
+                 if pd.notna(example_name):
+                     example_names.add(str(example_name).strip())
+                 schema_rows_mask.append(False)
              else:
-                 schema_rows_mask.append(True)
-                 if pd.isna(self._get_parent(row)) and root_row is None:
-                     root_row = row
+                 # Check if this row is a child/descendant of an example
+                 if pd.notna(parent) and str(parent).strip() in example_names:
+                     if pd.notna(name): example_names.add(str(name).strip())
+                     if pd.notna(desc): example_names.add(str(desc).strip())
+                     
+                     example_rows.append(row) # Add child row to example rows
+                     schema_rows_mask.append(False)
+                 else:
+                     schema_rows_mask.append(True)
+                     if pd.isna(self._get_parent(row)) and root_row is None:
+                         root_row = row
 
         if root_row is None: 
              # Fallback
              return {"description": "Response"}
 
-        desc = self._get_name(root_row) or self._get_description(root_row) or "Response"
+        # Response description extraction (same as before)
+        if hasattr(df, 'attrs') and 'response_description' in df.attrs:
+             desc = df.attrs['response_description']
+        elif len(df) > 0:
+            first_row = df.iloc[0]
+            desc = self._get_parent(first_row) or "Response"
+        else:
+            desc = "Response"
+        
         type_val = str(self._get_type(root_row)).strip().lower()
         schema_ref = self._get_schema_name(root_row)
 
         # 2. Global Response Reference (Type == 'response')
-        if type_val == 'response' and pd.notna(schema_ref):
-             return {"$ref": f"#/components/responses/{schema_ref}"}
+        # ONLY if no headers and no explicit content
+        is_pure_ref = (type_val == 'response' and pd.notna(schema_ref)) and (not header_rows) and (not content_rows)
+        
+        if is_pure_ref:
+              return {"$ref": f"#/components/responses/{schema_ref}"}
 
         # 3. Inline Response
         resp_obj = {"description": str(desc)}
@@ -294,34 +384,17 @@ class OASGenerator:
                      except:
                             resp_obj["content"][content_type]["example"] = ex_val
                         
-                # Fallback: Hybrid Heuristic from Body Examples
-                if "examples" not in resp_obj.get("content", {}).get(content_type, {}) and "example" not in resp_obj.get("content", {}).get(content_type, {}):
-                    if body_examples:
-                         # Heuristic Mapping
-                         target_name = None
-                         if code.startswith('2'): target_name = "OK"
-                         elif code == '400': target_name = "Bad Request"
-                         elif code == '401': target_name = "Unauthorized"
-                         elif code == '403': target_name = "Forbidden"
-                         elif code == '404': target_name = "Not Found"
-                         elif code == '500': target_name = "Internal Server Error"
-                         
-                         if target_name and target_name in body_examples:
-                             ex_str = str(body_examples[target_name]).strip()
-                             # Parse
-                             try:
-                                 if ex_str.startswith("{") or ex_str.startswith("["):
-                                     parsed = json.loads(ex_str)
-                                 else:
-                                     parsed = yaml.safe_load(ex_str)
-                             except:
-                                 parsed = ex_str
-                                 
-                             # Wrap in named example
-                             if "content" in resp_obj and content_type in resp_obj["content"]:
-                                 resp_obj["content"][content_type]["examples"] = {
-                                     target_name: {"value": parsed}
-                                 }
+                # (Fallback logic removed)
+                
+                # Build Examples from Section=example rows
+                if example_rows:
+                    built_examples = self._build_examples_from_rows(pd.DataFrame(example_rows))
+                    if built_examples:
+                        existing = resp_obj["content"][content_type].get("examples", {})
+                        for k, v in built_examples.items():
+                            existing[k] = {"value": v}
+                        resp_obj["content"][content_type]["examples"] = existing
+                
 
         # 4. Headers
         if header_rows:
@@ -353,6 +426,155 @@ class OASGenerator:
         resp_obj = self._reorder_dict(resp_obj, ["description", "headers", "content"])
 
         return resp_obj
+
+    def _build_examples_from_rows(self, df):
+        """
+        Constructs example objects from rows marked as Section='example'.
+        Handles nesting and list indices (e.g. items[0]).
+        """
+        if df.empty: return {}
+        
+        # 1. Identify distinct examples (Root rows looking like Example Name)
+        # Roots are rows where Section='example' (found in calling function logic)
+        # But here we just have a pile of rows.
+        # We assume the caller passes a DF containing the Example Roots AND their children.
+        
+        # Re-index by Name
+        df = df.copy()
+        df.columns = df.columns.str.strip()
+        nodes = {}
+        for idx, row in df.iterrows():
+            name = self._get_name(row)
+             # If name is "examples" or "example" (the section header), we might skip or use as root?
+             # Actually, usually Name="Bad Request".
+            if pd.isna(name): continue
+            name = str(name).strip()
+            
+            # Value from Example column
+            ex_val = self._get_col_value(row, ["Example", "Examples"])
+            
+            nodes[idx] = {
+                "name": name,
+                "parent": self._get_parent(row),
+                "value": ex_val,
+                "children": []
+            }
+
+        # Build IDs map
+        # We need to map Parent Name -> List of Nodes
+        # But names are not unique (e.g. 'code' might appear in multiple objects).
+        # We need tree reconstruction relying on Parent.
+        # This is tricky without unique IDs. We rely on the order or name matching?
+        # The generator uses Name-based parent lookup in _build_schema...
+        # So we assume Parent column refers to the Name of a previous row.
+        
+        name_to_nodes = {}
+        for idx, node in nodes.items():
+            n = node["name"]
+            if n not in name_to_nodes: name_to_nodes[n] = []
+            name_to_nodes[n].append(node)
+            
+        roots = []
+        
+        for idx, node in nodes.items():
+            parent_name = node["parent"]
+            if pd.isna(parent_name):
+                roots.append(node)
+            else:
+                # Find parent
+                p_nodes = name_to_nodes.get(str(parent_name).strip())
+                
+                # Check for array indexed parent (e.g. errors[0])
+                if not p_nodes:
+                    m = re.match(r'(.+)\[(\d+)\]$', str(parent_name).strip())
+                    if m:
+                        base = m.group(1)
+                        idx = int(m.group(2))
+                        p_nodes = name_to_nodes.get(base)
+                        if p_nodes:
+                             # We found the base array node!
+                             # We attach this child to it.
+                             # BUT we need to mark that it belongs to index 'idx'.
+                             # For flat reconstruction, we can just attach it.
+                             # But `build_node` needs to know about indices.
+                             # We can store 'index' in the node metadata?
+                             node["array_index"] = idx
+                
+                if p_nodes:
+                    p_nodes[0]["children"].append(node)
+                else:
+                    roots.append(node) # Parent not found, treat as root
+        
+        # Now convert trees to dict/value
+        result = {}
+        
+        def build_node(node):
+            # If leaf, return value (parsed)
+            if not node["children"]:
+                val = node["value"]
+                return self._parse_example_string(val) if pd.notna(val) else None
+                
+            # Group children by array_index if present
+            # This handles parent="list[0]" case
+            list_grouped = {}
+            has_indexed_children = False
+            
+            # Check if any child has array_index
+            for child in node["children"]:
+                if "array_index" in child:
+                    has_indexed_children = True
+                    idx = child["array_index"]
+                    if idx not in list_grouped: list_grouped[idx] = {}
+                    # Build child value recursively
+                    # Note: child name is the property name (e.g. 'dateTime')
+                    list_grouped[idx][child["name"]] = build_node(child)
+
+            if has_indexed_children:
+                # Construct list from groups
+                max_idx = max(list_grouped.keys()) if list_grouped else -1
+                result_list = [None] * (max_idx + 1)
+                for idx, obj in list_grouped.items():
+                    result_list[idx] = obj
+                return result_list
+
+            # Function to handle name[0] notation (child name text)
+            # (Existing logic implies child name itself is indexed, e.g. items[0], items[1]...)
+            # We reuse similar logic?
+            # If child name is "items[0]", then we are building a dict where key is "items"?
+            # Or is the parent an array?
+            # If parent is "items", and children are "items[0]", "items[1]"... that's weird naming.
+            # Usually: Parent="items", Child="subfield", ParentRef="items[0]". (Handled above).
+            # OR Parent="obj", Child="items[0]".
+            # In formatting string: `items[0]` might mean `items` is a list, and we are defining index 0.
+            
+            # Legacy logic for name[idx]:
+            obj = {}
+            for child in node["children"]:
+                child_val = build_node(child)
+                c_name = child["name"]
+                
+                m = re.match(r'(.+)\[(\d+)\]$', c_name)
+                if m:
+                     base = m.group(1)
+                     idx = int(m.group(2))
+                     if base not in obj: obj[base] = []
+                     while len(obj[base]) <= idx: obj[base].append(None)
+                     # If we are assigning a value to index, we assume it's a scalar or object?
+                     # Ideally we merge?
+                     # For now, just assign.
+                     obj[base][idx] = child_val
+                else:
+                     obj[c_name] = child_val
+                     
+            return obj
+
+        # Re-implement simple dict builder without complex array logic for now
+        # Just standard Key-Value
+        final_examples = {}
+        for root in roots:
+             final_examples[root["name"]] = build_node(root)
+             
+        return final_examples
 
     def _build_schema_from_flat_table(self, df):
         """
@@ -454,6 +676,15 @@ class OASGenerator:
                     return schema 
                 else:
                     schema["$ref"] = ref_path
+        
+        
+        # Don't treat Excel-specific types as valid OAS types
+        # These should be handled as references (parameter, schema, header) or are not valid types
+        invalid_types = ['parameter', 'parameters', 'schema', 'header', 'response']
+        if type_val in invalid_types:
+            # If we reach here with these types, it means Schema Name was empty
+            # Default to string type as fallback
+            type_val = 'string'
         
         if type_val != "array" and "$ref" not in schema and "allOf" not in schema:
             schema["type"] = type_val
