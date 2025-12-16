@@ -2,6 +2,8 @@ import yaml
 import pandas as pd
 import json
 import textwrap
+import re
+from datetime import datetime
 from collections import OrderedDict
 
 # RawYAML - stores raw YAML text for literal insertion
@@ -9,34 +11,6 @@ class RawYAML:
     def __init__(self, raw_text, base_indent=0):
         self.raw_text = raw_text
         self.base_indent = base_indent
-
-# LiteralString wrapper to force literal block style
-class LiteralString(str):
-    pass
-
-# Custom YAML Loader that preserves order and wraps multiline strings
-class OrderPreservingLoader(yaml.SafeLoader):
-    pass
-
-def construct_mapping(loader, node):
-    loader.flatten_mapping(node)
-    pairs = loader.construct_pairs(node)
-    return OrderedDict(pairs)
-
-def construct_scalar(loader, node):
-    value = loader.construct_scalar(node)
-    # Auto-wrap multiline strings in LiteralString
-    if isinstance(value, str) and '\n' in value:
-        return LiteralString(value)
-    return value
-
-OrderPreservingLoader.add_constructor(
-    yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG,
-    construct_mapping)
-
-OrderPreservingLoader.add_constructor(
-    yaml.resolver.BaseResolver.DEFAULT_SCALAR_TAG,
-    construct_scalar)
 
 # Custom YAML Dumper
 class OASDumper(yaml.SafeDumper):
@@ -181,6 +155,9 @@ class OASGenerator:
     def _build_request_body(self, df):
         if df is None or df.empty: return None
         
+        # DEBUG
+        # print(f"DEBUG BODY COLS: {df.columns.tolist()}")
+        
         # The structure usually has the content-type as a root or row 0
         # Let's find the content type. 
         # Heuristic: verify if 'application/json' is in Name column
@@ -191,6 +168,13 @@ class OASGenerator:
         
         schema = self._build_schema_from_flat_table(df)
         
+        # Unwrap if schema has a single property matching content_type
+        # e.g. schema = { properties: { "application/json": { ... } } }
+        if schema and "properties" in schema and len(schema["properties"]) == 1:
+             root_key = list(schema["properties"].keys())[0]
+             if root_key == content_type or root_key == "application/json":
+                  schema = schema["properties"][root_key]
+
         return {
             "content": {
                 content_type: {
@@ -222,7 +206,7 @@ class OASGenerator:
         return self._get_col_value(row, ["Type", "Data Type", "Item Type", "Type "]) 
 
     def _get_name(self, row):
-        return self._get_col_value(row, ["Name", "Parameter Name", "Field Name", "Request Parameters", "Path"])
+        return self._get_col_value(row, ["Name", "Parameter Name", "Field Name", "Request Parameters", "Path", "Name.1"])
 
     def _get_parent(self, row):
         return self._get_col_value(row, ["Parent", "Parent Name"])
@@ -386,8 +370,9 @@ class OASGenerator:
             name = str(name).strip()
             
             # Skip rows that look like content-types or section headers if they don't have schema info
-            if name == "application/json" and pd.isna(self._get_parent(row)):
-                continue
+            # FIX: Do NOT skip "application/json" if it acts as a parent!
+            # if name == "application/json" and pd.isna(self._get_parent(row)):
+            #    continue
             
             node = {
                 "name": name,
@@ -608,12 +593,64 @@ class OASGenerator:
              for idx, row in df_head.iterrows():
                  name = self._get_name(row)
                  if pd.notna(name):
+                      name = str(name).strip()
                       schema = self._map_type_to_schema(row)
-                      desc = schema.pop("description", None)
-                      header_obj = {"schema": schema}
-                      if desc: header_obj["description"] = desc
-                      self.oas["components"]["headers"][str(name)] = header_obj
+                      
+                      # Description management: Header description vs Schema description
+                      # Usually Header description is for the header itself.
+                      # Schema description is for the value.
+                      # In this tool, they might be mixed.
+                      # self._map_type_to_schema adds description to schema if present.
+                      
+                      # 1. Promote to Component Schema
+                      # Check if schema already exists (from Schemas sheet)?
+                      # If exists, we might overwrite or skip.
+                      # If we overwrite, we ensure consistency with Header def.
+                      # "Last Good" had it in both.
+                      if name not in self.oas["components"]["schemas"]:
+                          self.oas["components"]["schemas"][name] = schema.copy()
+                      
+                      # 2. Create Header Object referencing the Schema
+                      header_desc = self._get_description(row)
+                      header_obj = {
+                          "schema": {"$ref": f"#/components/schemas/{name}"}
+                      }
+                      if header_desc:
+                          header_obj["description"] = str(header_desc)
+                          
+                      self.oas["components"]["headers"][name] = header_obj
+        if global_components.get("responses") is not None:
+             # ... (existing response logic) ...
+             pass
              
+        # Rule 10: Check for missing critical schemas and report them
+        self._check_and_report_deficiencies()
+
+    def _log_deficiency(self, msg):
+        log_file = "generation_deficiencies.log"
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        with open(log_file, "a", encoding="utf-8") as f:
+            f.write(f"[{timestamp}] [MISSING DATA] {msg}\n")
+            
+    def _check_and_report_deficiencies(self):
+        """
+        Checks if expected standard schemas are present.
+        If not, logs them to a report file to be corrected in Excel.
+        """
+        required_schemas = ["DateTime", "dateTime", "name", "identification"]
+        schemas = self.oas["components"]["schemas"]
+        
+        missing = []
+        for req in required_schemas:
+            if req not in schemas:
+                missing.append(req)
+                
+        if missing:
+            msg = f"The following schemas are referenced but missing from the source Excel files: {', '.join(missing)}. Please add them to the 'Schemas' or 'Parameters' sheet."
+            print(f"\n[WARNING] {msg}")
+            print(f"See generation_deficiencies.log for details.\n")
+            self._log_deficiency(msg)
+
     def _build_schema_group(self, df):
         """
         Builds a dictionary of schema components from a single flat sheet containing multiple schemas.
