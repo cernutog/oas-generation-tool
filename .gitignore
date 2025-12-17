@@ -7,16 +7,17 @@ generated_oas_3.1.yaml
 .vscode/
 .env
 
-# Debug and temporary scripts
-debug_*
-inspect_*
-fix_*
-patch_*
-verify_*
-check_*
-analyze_*
-compare_*
-list_*
+
+# Debug and temporary scripts (Commented out to allow utility scripts)
+# debug_*
+# inspect_*
+# fix_*
+# patch_*
+# verify_*
+# check_*
+# analyze_*
+# compare_*
+# list_*
 
 # Test scripts in root (should be in tests/)
 /test_*.py

@@ -1,8 +1,9 @@
 import yaml
-import pandas as pd
+import re
 import json
 import textwrap
-import re
+import copy
+import pandas as pd
 from datetime import datetime
 from collections import OrderedDict
 
@@ -256,26 +257,44 @@ class OASGenerator:
         Parses a string as JSON or YAML.
         """
         if not ex_str: return None
+        
+        ex_str = str(ex_str).strip()
+        
+        # 1. Try JSON if it looks like JSON
+        if ex_str.startswith("{") or ex_str.startswith("["):
+            try:
+                return json.loads(ex_str)
+            except:
+                # Try fixing single quotes
+                try:
+                    fixed = ex_str.replace("'", '"')
+                    fixed = fixed.replace("None", "null").replace("False", "false").replace("True", "true")
+                    return json.loads(fixed)
+                except:
+                    pass # Fallback to YAML
+
+        # 2. Try YAML (Safe Load)
         try:
-             ex_str = str(ex_str).strip()
-             # Fix single quotes in JSON-like strings (common in Python dumps or incorrect Excel format)
-             if ex_str.startswith("{") or ex_str.startswith("["):
-                  # Replace single quotes with double quotes if they look like keys/values
-                  # Simple heuristic: replace ' with " if it is likely a delimiter
-                  # But be careful about apostrophes in text.
-                  # Safer: try json.loads first. If fail, substitute and try again?
-                  try:
-                      return json.loads(ex_str)
-                  except:
-                      # Try replacing single with double
-                      fixed = ex_str.replace("'", '"')
-                      # Replace None with null, False with false, True with true if needed?
-                      fixed = fixed.replace("None", "null").replace("False", "false").replace("True", "true")
-                      return json.loads(fixed)
-             else:
-                  return yaml.safe_load(ex_str)
+            return yaml.safe_load(ex_str)
         except:
-             return ex_str
+            # 3. If YAML failed, it might be because of outer braces wrapping block-style YAML?
+            # e.g. "{ \n key: val \n }" -> Invalid flow style but valid block if stripped.
+            if ex_str.startswith("{") and ex_str.endswith("}"):
+                # Remove braces but preserve internal relative indentation
+                inner = ex_str[1:-1]
+                # Normalize tabs to spaces first
+                inner = inner.expandtabs(2)
+                # Use textwrap.dedent to normalize indentation
+                inner = textwrap.dedent(inner)
+                try:
+                    return yaml.safe_load(inner)
+                except Exception as e:
+                    # print(f"DEBUG: Inner YAML parse failed: {e}")
+                    # If parsing fails, return the stripped content as a string
+                    # This produces a Literal Block (|) in YAML instead of a JSON-like string ("{...}")
+                    return inner
+            
+            return ex_str
 
     def _build_single_response(self, df, body_examples=None, code=""):
         if df is None or df.empty: return {"description": "Response"}
