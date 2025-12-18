@@ -9,6 +9,8 @@ import sys
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 import main as main_script
+from linter import SpectralRunner
+from charts import PieChart
 
 # Set Theme
 ctk.set_appearance_mode("System")  # Modes: "System" (standard), "Dark", "Light"
@@ -19,45 +21,56 @@ class OASGenApp(ctk.CTk):
         super().__init__()
 
         self.title("OAS Generation Tool")
-        self.geometry("700x550")
+        self.geometry("900x650") # Increased size for charts
 
         # Set Window Icon
         icon_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "icon.ico")
         if not os.path.exists(icon_path):
-            # Try looking one level up (dev mode)
             icon_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "icon.ico")
         
         if os.path.exists(icon_path):
             try:
                 self.iconbitmap(icon_path)
             except Exception:
-                pass # Icon loading might fail on some systems/formats, ignore
+                pass 
         
         # Grid Layout Configuration
         self.grid_columnconfigure(0, weight=1)
-        self.grid_rowconfigure(2, weight=1)  # Log area expands
+        self.grid_rowconfigure(1, weight=1) # Tabview expands
 
         # --- Header ---
         self.frame_header = ctk.CTkFrame(self, corner_radius=0)
-        self.frame_header.grid(row=0, column=0, sticky="ew", padx=20, pady=(20, 10))
+        self.frame_header.grid(row=0, column=0, sticky="ew", padx=0, pady=0)
         
         self.lbl_title = ctk.CTkLabel(self.frame_header, text="OAS Generator", font=ctk.CTkFont(size=20, weight="bold"))
-        self.lbl_title.pack(padx=10, pady=10, side="left")
+        self.lbl_title.pack(padx=20, pady=15, side="left")
         
-        self.lbl_version = ctk.CTkLabel(self.frame_header, text="v1.0", font=ctk.CTkFont(size=12))
-        self.lbl_version.pack(padx=10, pady=15, side="right")
+        self.lbl_version = ctk.CTkLabel(self.frame_header, text="v1.1", font=ctk.CTkFont(size=12))
+        self.lbl_version.pack(padx=20, pady=15, side="right")
 
-        # --- Controls Area ---
-        self.frame_controls = ctk.CTkFrame(self)
-        self.frame_controls.grid(row=1, column=0, sticky="ew", padx=20, pady=10)
-        self.frame_controls.grid_columnconfigure(1, weight=1) # Entry expands
+        # --- Tab View ---
+        self.tabview = ctk.CTkTabview(self)
+        self.tabview.grid(row=1, column=0, sticky="nsew", padx=20, pady=10)
+        
+        self.tab_gen = self.tabview.add("Generation")
+        self.tab_val = self.tabview.add("Validation")
 
-        # Directory Selection
+        # ==========================
+        # TAB 1: GENERATION
+        # ==========================
+        self.tab_gen.grid_columnconfigure(0, weight=1)
+        self.tab_gen.grid_rowconfigure(2, weight=1) # Log expands
+
+        # Controls
+        self.frame_controls = ctk.CTkFrame(self.tab_gen, fg_color="transparent")
+        self.frame_controls.grid(row=0, column=0, sticky="ew", padx=10, pady=10)
+        self.frame_controls.grid_columnconfigure(1, weight=1)
+
         self.lbl_dir = ctk.CTkLabel(self.frame_controls, text="Template Directory:")
-        self.lbl_dir.grid(row=0, column=0, padx=15, pady=15, sticky="w")
+        self.lbl_dir.grid(row=0, column=0, padx=10, pady=10, sticky="w")
 
         self.entry_dir = ctk.CTkEntry(self.frame_controls, placeholder_text="Path to API Templates...")
-        self.entry_dir.grid(row=0, column=1, padx=(0, 10), pady=15, sticky="ew")
+        self.entry_dir.grid(row=0, column=1, padx=(0, 10), pady=10, sticky="ew")
         
         # Default Path Logic
         default_path = os.path.join(os.getcwd(), "..", "API Templates")
@@ -67,14 +80,11 @@ class OASGenApp(ctk.CTk):
              self.entry_dir.insert(0, os.getcwd())
 
         self.btn_browse = ctk.CTkButton(self.frame_controls, text="Browse", width=100, command=self.browse_dir)
-        self.btn_browse.grid(row=0, column=2, padx=15, pady=15)
+        self.btn_browse.grid(row=0, column=2, padx=10, pady=10)
 
         # Options
-        self.lbl_opts = ctk.CTkLabel(self.frame_controls, text="Options:")
-        self.lbl_opts.grid(row=1, column=0, padx=15, pady=(0, 15), sticky="w")
-        
-        self.frame_opts = ctk.CTkFrame(self.frame_controls, fg_color="transparent")
-        self.frame_opts.grid(row=1, column=1, columnspan=2, sticky="w", padx=0, pady=(0, 15))
+        self.frame_opts = ctk.CTkFrame(self.tab_gen, fg_color="transparent")
+        self.frame_opts.grid(row=1, column=0, sticky="w", padx=20, pady=(0, 10))
 
         self.var_30 = ctk.BooleanVar(value=True)
         self.chk_30 = ctk.CTkCheckBox(self.frame_opts, text="Generate OAS 3.0", variable=self.var_30)
@@ -84,21 +94,54 @@ class OASGenApp(ctk.CTk):
         self.chk_31 = ctk.CTkCheckBox(self.frame_opts, text="Generate OAS 3.1", variable=self.var_31)
         self.chk_31.pack(side="left")
 
-        # Generate Button
-        self.btn_gen = ctk.CTkButton(self, text="GENERATE SPECIFICATIONS", font=ctk.CTkFont(size=14, weight="bold"), height=40, command=self.start_generation)
-        self.btn_gen.grid(row=3, column=0, padx=20, pady=(10, 20), sticky="ew")
+        # Generate Button layout on the right of opts? Or below? Below logs? 
+        # Let's keep it prominent.
+        self.btn_gen = ctk.CTkButton(self.frame_opts, text="GENERATE", font=ctk.CTkFont(weight="bold"), width=150, command=self.start_generation)
+        self.btn_gen.pack(side="left", padx=40)
 
-        # --- Log Area ---
-        self.frame_log = ctk.CTkFrame(self)
-        self.frame_log.grid(row=2, column=0, sticky="nsew", padx=20, pady=0)
-        self.frame_log.grid_rowconfigure(0, weight=1)
-        self.frame_log.grid_columnconfigure(0, weight=1)
+        # Log Area
+        self.log_area = ctk.CTkTextbox(self.tab_gen)
+        self.log_area.grid(row=2, column=0, padx=10, pady=10, sticky="nsew")
+        self.log_area.insert("0.0", "Ready to generate.\n")
+        self.log_area.configure(state="disabled")
 
-        self.log_area = ctk.CTkTextbox(self.frame_log)
-        self.log_area.grid(row=0, column=0, padx=10, pady=10, sticky="nsew")
-        self.log_area.insert("0.0", "Ready.\n")
-        self.log_area.configure(state="disabled") # Read-only primarily
+        # ==========================
+        # TAB 2: VALIDATION
+        # ==========================
+        self.tab_val.grid_columnconfigure(0, weight=1) # List
+        self.tab_val.grid_columnconfigure(1, weight=1) # Chart
+        self.tab_val.grid_rowconfigure(1, weight=1)
 
+        # Setup Runner
+        self.linter = SpectralRunner()
+        self.last_generated_files = [] # Track what we made
+
+        # Top Bar
+        self.frame_val_top = ctk.CTkFrame(self.tab_val, fg_color="transparent")
+        self.frame_val_top.grid(row=0, column=0, columnspan=2, sticky="ew", padx=10, pady=10)
+        
+        self.btn_lint = ctk.CTkButton(self.frame_val_top, text="Run Validation (Spectral)", command=self.run_validation)
+        self.btn_lint.pack(side="left")
+        
+        self.lbl_status = ctk.CTkLabel(self.frame_val_top, text="No validation run yet.", text_color="gray")
+        self.lbl_status.pack(side="left", padx=20)
+        
+        self.cbo_files = ctk.CTkComboBox(self.frame_val_top, width=300, values=["No OAS files found"])
+        self.cbo_files.pack(side="right")
+
+        # Left: Analytic View (Scrollable Frame with Labels)
+        self.frame_list = ctk.CTkScrollableFrame(self.tab_val, label_text="Issues List")
+        self.frame_list.grid(row=1, column=0, sticky="nsew", padx=10, pady=10)
+        
+        # Right: Pie Chart
+        self.frame_chart_container = ctk.CTkFrame(self.tab_val) # Container for bg color
+        self.frame_chart_container.grid(row=1, column=1, sticky="nsew", padx=10, pady=10)
+        self.frame_chart_container.grid_rowconfigure(0, weight=1) # Center vertically?
+        self.frame_chart_container.grid_columnconfigure(0, weight=1) # Center horizontally?
+
+        self.chart = PieChart(self.frame_chart_container)
+        self.chart.pack(fill="both", expand=True, padx=20, pady=20)
+        
     def browse_dir(self):
         directory = filedialog.askdirectory()
         if directory:
@@ -119,32 +162,121 @@ class OASGenApp(ctk.CTk):
         if not base_dir:
             self.log("ERROR: Please select a directory.")
             return
-
+            
         self.btn_gen.configure(state="disabled", text="GENERATING...")
-        self.log_area.configure(state="normal")
-        self.log_area.delete("1.0", "end")
-        self.log_area.configure(state="disabled")
         self.log("Starting generation process...")
         
-        # Run in thread
         t = threading.Thread(target=self.run_process, args=(base_dir, gen_30, gen_31))
         t.start()
         
     def run_process(self, base_dir, gen_30, gen_31):
         try:
-            # Use log_callback adapter to push to GUI
+            self.last_generated_files = [] 
+            
             def gui_logger(msg):
                 self.after(0, self.log, msg)
-                
+                # Capture file paths from logs if possible or construct them
+                if "Writing OAS" in msg:
+                    # Simple extraction of path from log message
+                    parts = msg.split(": ")
+                    if len(parts) > 1:
+                         self.last_generated_files.append(parts[1].strip())
+                         self.after(0, self.update_file_list)
+                         
             main_script.generate_oas(base_dir, gen_30=gen_30, gen_31=gen_31, log_callback=gui_logger)
             
         except Exception as e:
             self.after(0, self.log, f"CRITICAL ERROR: {e}")
         finally:
             def reset_btn():
-                self.btn_gen.configure(state="normal", text="GENERATE SPECIFICATIONS")
+                self.btn_gen.configure(state="normal", text="GENERATE")
+                self.after(0, self.update_file_list) # Final refresh
             self.after(0, reset_btn)
 
+    def update_file_list(self):
+        if self.last_generated_files:
+            self.cbo_files.configure(values=self.last_generated_files)
+            self.cbo_files.set(self.last_generated_files[0])
+            self.btn_lint.configure(state="normal")
+        else:
+             # Try to find default files in generated folder
+             base_dir = self.entry_dir.get()
+             gen_dir = os.path.join(base_dir, "generated")
+             found = []
+             if os.path.exists(gen_dir):
+                 for f in os.listdir(gen_dir):
+                     if f.endswith(".yaml") or f.endswith(".json"):
+                         found.append(os.path.join(gen_dir, f))
+             
+             if found:
+                 self.cbo_files.configure(values=found)
+                 self.cbo_files.set(found[0])
+                 self.last_generated_files = found
+
+    def run_validation(self):
+        selected_file = self.cbo_files.get()
+        if not selected_file or not os.path.exists(selected_file):
+            self.lbl_status.configure(text="File not found!", text_color="red")
+            return
+            
+        self.lbl_status.configure(text="Running Spectral...", text_color="orange")
+        self.frame_list.configure(label_text="Running...")
+        
+        # Clear list
+        for widget in self.frame_list.winfo_children():
+            widget.destroy()
+
+        def validate_thread():
+            result = self.linter.run_lint(selected_file)
+            self.after(0, lambda: self.show_results(result))
+
+        t = threading.Thread(target=validate_thread)
+        t.start()
+
+    def show_results(self, result):
+        if not result['success']:
+            self.lbl_status.configure(text="Error running Spectral", text_color="red")
+            self.frame_list.configure(label_text="Error")
+            err_lbl = ctk.CTkLabel(self.frame_list, text=result.get('error_msg', 'Unknown Error'), text_color="red")
+            err_lbl.pack()
+            return
+
+        summary = result['summary']
+        details = result['details']
+        total_issues = len(details)
+        
+        self.lbl_status.configure(text=f"Check Complete: {total_issues} issues found.", text_color="green" if total_issues == 0 else "orange")
+        self.frame_list.configure(label_text=f"Issues ({total_issues})")
+        
+        # Update Chart
+        self.chart.set_data(summary)
+
+        # Populate List
+        if total_issues == 0:
+             ctk.CTkLabel(self.frame_list, text="No issues found! Great job!", text_color="green", font=("Arial", 16)).pack(pady=20)
+        else:
+            for item in details:
+                # Severity Color
+                color = "gray"
+                if item['severity'] == "error": color = "#FF4444"
+                elif item['severity'] == "warning": color = "#FFBB33"
+                elif item['severity'] == "info": color = "#33B5E5"
+                
+                # Card Frame
+                card = ctk.CTkFrame(self.frame_list, border_width=1, border_color="gray")
+                card.pack(fill="x", pady=2, padx=2)
+                
+                # Row 1: Code + Severity
+                r1 = ctk.CTkFrame(card, fg_color="transparent")
+                r1.pack(fill="x", padx=5, pady=2)
+                ctk.CTkLabel(r1, text=f"[{item['severity'].upper()}]", text_color=color, font=("Arial", 11, "bold")).pack(side="left")
+                ctk.CTkLabel(r1, text=item['code'], font=("Arial", 11, "bold")).pack(side="left", padx=5)
+                ctk.CTkLabel(r1, text=f"Line: {item['line']}", text_color="gray", font=("Arial", 10)).pack(side="right")
+                
+                # Row 2: Message
+                ctk.CTkLabel(card, text=item['message'], anchor="w", justify="left", wraplength=350).pack(fill="x", padx=5, pady=(0, 5))
+
+    
 if __name__ == "__main__":
     app = OASGenApp()
     app.mainloop()
