@@ -112,22 +112,20 @@ class OASGenApp(ctk.CTk):
         self.tab_val.grid_columnconfigure(1, weight=1) # Chart
         self.tab_val.grid_rowconfigure(1, weight=1)
 
-        # Setup Runner
-        self.linter = SpectralRunner()
-        self.last_generated_files = [] # Track what we made
-
         # Top Bar
         self.frame_val_top = ctk.CTkFrame(self.tab_val, fg_color="transparent")
         self.frame_val_top.grid(row=0, column=0, columnspan=2, sticky="ew", padx=10, pady=10)
+        self.frame_val_top.grid_columnconfigure(2, weight=1) # Combo expands
         
         self.btn_lint = ctk.CTkButton(self.frame_val_top, text="Run Validation (Spectral)", command=self.run_validation)
-        self.btn_lint.pack(side="left")
+        self.btn_lint.grid(row=0, column=0, padx=(0, 20))
         
         self.lbl_status = ctk.CTkLabel(self.frame_val_top, text="No validation run yet.", text_color="gray")
-        self.lbl_status.pack(side="left", padx=20)
+        self.lbl_status.grid(row=0, column=1, sticky="w")
         
-        self.cbo_files = ctk.CTkComboBox(self.frame_val_top, width=300, values=["No OAS files found"])
-        self.cbo_files.pack(side="right")
+        self.file_map = {} # filename -> fullpath
+        self.cbo_files = ctk.CTkComboBox(self.frame_val_top, values=["No OAS files found"])
+        self.cbo_files.grid(row=0, column=2, sticky="ew", padx=(20, 0))
 
         # Left: Analytic View (Scrollable Frame with Labels)
         self.frame_list = ctk.CTkScrollableFrame(self.tab_val, label_text="Issues List")
@@ -136,8 +134,8 @@ class OASGenApp(ctk.CTk):
         # Right: Pie Chart
         self.frame_chart_container = ctk.CTkFrame(self.tab_val) # Container for bg color
         self.frame_chart_container.grid(row=1, column=1, sticky="nsew", padx=10, pady=10)
-        self.frame_chart_container.grid_rowconfigure(0, weight=1) # Center vertically?
-        self.frame_chart_container.grid_columnconfigure(0, weight=1) # Center horizontally?
+        self.frame_chart_container.grid_rowconfigure(0, weight=1) 
+        self.frame_chart_container.grid_columnconfigure(0, weight=1)
 
         self.chart = PieChart(self.frame_chart_container)
         self.chart.pack(fill="both", expand=True, padx=20, pady=20)
@@ -162,8 +160,11 @@ class OASGenApp(ctk.CTk):
         if not base_dir:
             self.log("ERROR: Please select a directory.")
             return
-            
+
         self.btn_gen.configure(state="disabled", text="GENERATING...")
+        self.log_area.configure(state="normal")
+        self.log_area.delete("1.0", "end")
+        self.log_area.configure(state="disabled")
         self.log("Starting generation process...")
         
         t = threading.Thread(target=self.run_process, args=(base_dir, gen_30, gen_31))
@@ -194,33 +195,45 @@ class OASGenApp(ctk.CTk):
             self.after(0, reset_btn)
 
     def update_file_list(self):
-        if self.last_generated_files:
-            self.cbo_files.configure(values=self.last_generated_files)
-            self.cbo_files.set(self.last_generated_files[0])
-            self.btn_lint.configure(state="normal")
-        else:
+        files_to_show = []
+        # Combine last generated with finding existing ones
+        candidates = list(self.last_generated_files)
+        
+        if not candidates:
              # Try to find default files in generated folder
              base_dir = self.entry_dir.get()
              gen_dir = os.path.join(base_dir, "generated")
-             found = []
              if os.path.exists(gen_dir):
                  for f in os.listdir(gen_dir):
                      if f.endswith(".yaml") or f.endswith(".json"):
-                         found.append(os.path.join(gen_dir, f))
-             
-             if found:
-                 self.cbo_files.configure(values=found)
-                 self.cbo_files.set(found[0])
-                 self.last_generated_files = found
+                         candidates.append(os.path.join(gen_dir, f))
+        
+        # Build Map
+        self.file_map = {}
+        display_names = []
+        for path in candidates:
+            name = os.path.basename(path)
+            self.file_map[name] = path
+            display_names.append(name)
+            
+        if display_names:
+            self.cbo_files.configure(values=display_names)
+            self.cbo_files.set(display_names[0])
+            self.btn_lint.configure(state="normal")
+        else:
+            self.cbo_files.configure(values=["No OAS files found"])
+            self.cbo_files.set("No OAS files found")
 
     def run_validation(self):
-        selected_file = self.cbo_files.get()
+        selected_name = self.cbo_files.get()
+        selected_file = self.file_map.get(selected_name)
+        
         if not selected_file or not os.path.exists(selected_file):
             self.lbl_status.configure(text="File not found!", text_color="red")
             return
             
         self.lbl_status.configure(text="Running Spectral...", text_color="orange")
-        self.frame_list.configure(label_text="Running...")
+        self.frame_list.configure(label_text=f"Issues List - {selected_name}")
         
         # Clear list
         for widget in self.frame_list.winfo_children():
