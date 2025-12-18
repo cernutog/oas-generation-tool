@@ -1,118 +1,195 @@
 import customtkinter as ctk
 import tkinter as tk
 import math
+import colorsys
 
-class PieChart(ctk.CTkFrame):
+class SemanticPieChart(ctk.CTkFrame):
     def __init__(self, master, **kwargs):
         super().__init__(master, **kwargs)
         
         self.canvas = tk.Canvas(self, bg=self._apply_appearance_mode(self._fg_color), highlightthickness=0)
         self.canvas.pack(fill="both", expand=True, padx=10, pady=10)
         
-        # Curated Palette (Material Design 500/600 level)
-        self.palette = [
-            '#F44336', # Red
-            '#E91E63', # Pink
-            '#9C27B0', # Purple
-            '#673AB7', # Deep Purple
-            '#3F51B5', # Indigo
-            '#2196F3', # Blue
-            '#03A9F4', # Light Blue
-            '#00BCD4', # Cyan
-            '#009688', # Teal
-            '#4CAF50', # Green
-            '#8BC34A', # Light Green
-            '#CDDC39', # Lime
-            '#FFEB3B', # Yellow
-            '#FFC107', # Amber
-            '#FF9800', # Orange
-            '#FF5722', # Deep Orange
-            '#795548', # Brown
-            '#607D8B', # Blue Grey
-        ]
-        
         self.data = {}
+        self.slices = [] 
+        
+        # Descriptions mapping (could be moved to separate file)
+        self.rule_descriptions = {
+            'oas3-schema': 'Object does not match the schema.',
+            'oas3-valid-media-example': 'Examples must be valid against their defined schema.',
+            'oas3-valid-schema-example': 'Schema examples must be valid against the schema.',
+            'path-params': 'Path parameters must be defined and valid.',
+            'operation-description': 'Operation must have a description.',
+            'info-description': 'Info object must have a description.',
+            'operation-tags': 'Operation should have tags.',
+            'operation-operationId': 'Operation should have a unique operationId.',
+            'typed-enum': 'Enum values must respect the specified type.',
+            'no-unused-components': 'Component is defined but never used.',
+            # Add more defaults/generic fallback
+        }
+        
         self.bind("<Configure>", self.draw)
+        self.canvas.bind("<Motion>", self.on_mouse_move)
+        self.canvas.bind("<Leave>", self.hide_tooltip)
 
-    def _get_color(self, index):
-        return self.palette[index % len(self.palette)]
-
-    def set_data(self, data):
-        self.data = data
+    def set_data(self, code_summary):
+        self.data = code_summary
         self.draw()
+
+    def _generate_hsl_gradient(self, base_hue, num_colors):
+        """
+        Generates 'num_colors' variations centered around a base hue.
+        base_hue: 0.0=Red, 0.14=Yellow/Gold
+        We want Full Red/Yellow as median.
+        Variation: Lightness and Saturation.
+        """
+        colors = []
+        if num_colors == 0: return []
+        if num_colors == 1:
+            # Return the "Full" base color
+            rgb = colorsys.hls_to_rgb(base_hue, 0.5, 1.0)
+            return [f'#{int(rgb[0]*255):02x}{int(rgb[1]*255):02x}{int(rgb[2]*255):02x}']
+            
+        # Distribute lightness around 0.5 (Normal)
+        # e.g. 3 colors -> 0.4, 0.5, 0.6
+        # Limit to 0.3 (Dark) - 0.8 (Pastel)
+        step = 0.4 / max(num_colors - 1, 1)
+        start_l = 0.3
+        
+        for i in range(num_colors):
+            l = start_l + (i * step)
+            # Clip
+            l = max(0.2, min(0.9, l))
+            
+            # Convert HLS (Hue, Lightness, Saturation) to RGB
+            rgb = colorsys.hls_to_rgb(base_hue, l, 1.0) # Full Saturation
+            hex_c = f'#{int(rgb[0]*255):02x}{int(rgb[1]*255):02x}{int(rgb[2]*255):02x}'
+            colors.append(hex_c)
+            
+        return list(reversed(colors)) # Dark to Light
 
     def draw(self, event=None):
         self.canvas.delete("all")
+        self.canvas.delete("tooltip_tag") # clear tooltip
+        self.slices = []
         
         w = self.canvas.winfo_width()
         h = self.canvas.winfo_height()
         
         if w < 50 or h < 50: return
 
-        # Layout: Pie on Left (60%), Legend on Right (40%)
-        pie_area_w = w * 0.6
-        legend_start_x = w * 0.65
-        
-        # Pie Dimensions
-        cx = pie_area_w / 2
+        padding = 20
+        cx = w / 2
         cy = h / 2
-        radius = min(pie_area_w, h) / 2 - 20
+        radius = min(w, h) / 2 - padding
         
-        total = sum(self.data.values())
+        total = sum(d['count'] for d in self.data.values())
         
         if total == 0:
-            self.canvas.create_oval(cx - radius, cy - radius, cx + radius, cy + radius, fill=self.colors['empty'], outline="")
-            self.canvas.create_text(cx, cy, text="No Data", fill="gray")
+            self.canvas.create_oval(cx - radius, cy - radius, cx + radius, cy + radius, fill="#E0E0E0", outline="")
+            self.canvas.create_text(cx, cy, text="No Data", fill="gray", font=("Arial", 12))
             return
 
-        start_angle = 90
-        sorted_items = sorted(self.data.items(), key=lambda x: x[1], reverse=True)
+        # Separate items by severity to generate gradients
+        errors = {k:v for k,v in self.data.items() if v['severity'] == 'error'}
+        warnings = {k:v for k,v in self.data.items() if v['severity'] == 'warning'}
+        others = {k:v for k,v in self.data.items() if v['severity'] not in ('error', 'warning')}
         
-        # Draw Pie
-        for i, (key, value) in enumerate(sorted_items):
-            if value == 0: continue
+        # Sort internal groups by count desc
+        errors = dict(sorted(errors.items(), key=lambda item: item[1]['count'], reverse=True))
+        warnings = dict(sorted(warnings.items(), key=lambda item: item[1]['count'], reverse=True))
+        
+        # Color Palettes
+        # Red Hue = 0.0/1.0. Yellow/Gold Hue ~= 0.12
+        err_colors = self._generate_hsl_gradient(0.0, len(errors))
+        warn_colors = self._generate_hsl_gradient(0.13, len(warnings)) # 0.13 is nice gold/amber
+        other_colors = self._generate_hsl_gradient(0.55, len(others)) # Blueish
+
+        # Combine for drawing order: Errors -> Warnings -> Others
+        final_list = []
+        
+        i = 0
+        for code, info in errors.items():
+            final_list.append((code, info, err_colors[i]))
+            i+=1
             
-            extent = (value / total) * 360
-            color = self._get_color(i)
+        i = 0
+        for code, info in warnings.items():
+            final_list.append((code, info, warn_colors[i]))
+            i+=1
+
+        i = 0
+        for code, info in others.items():
+            final_list.append((code, info, other_colors[i]))
+            i+=1
             
+        start_angle = 90
+        
+        for code, info, color in final_list:
+            cnt = info['count']
+            extent = (cnt / total) * 360
+            
+            tag = f"slice_{code}"
             self.canvas.create_arc(
                 cx - radius, cy - radius, cx + radius, cy + radius,
                 start=start_angle, extent=extent,
-                fill=color, outline="white", width=2
+                fill=color, outline="white", width=1.5, tags=tag
             )
             
-            # Label on Pie (if large enough)
-            if extent > 20:
-                mid = math.radians(start_angle + extent / 2)
-                lbl_r = radius * 0.7
-                lx = cx + lbl_r * math.cos(mid)
-                ly = cy - lbl_r * math.sin(mid)
-                self.canvas.create_text(lx, ly, text=str(value), fill="white", font=("Arial", 10, "bold"))
-                
+            self.slices.append({
+                'start': start_angle % 360,
+                'end': (start_angle + extent) % 360,
+                'code': code,
+                'count': cnt,
+                'severity': info['severity'],
+                'cx': cx, 'cy': cy, 'r': radius,
+                'color': color
+            })
+            
             start_angle += extent
 
-        # Draw Legend
-        legend_y = 20
-        for i, (key, value) in enumerate(sorted_items):
-            if value == 0: continue
-            color = self._get_color(i)
-            
-            # Color Box
-            self.canvas.create_rectangle(legend_start_x, legend_y, legend_start_x + 15, legend_y + 15, fill=color, outline="")
-            
-            # Text (Code + Count) - Truncate if too long
-            label_text = f"{key} ({value})"
-            if len(label_text) > 30: label_text = label_text[:27] + "..."
-            
-            self.canvas.create_text(
-                legend_start_x + 25, legend_y + 8, 
-                text=label_text, 
-                anchor="w", 
-                fill=self._apply_appearance_mode(ctk.ThemeManager.theme["CTkLabel"]["text_color"]),
-                font=("Arial", 10)
-            )
-            
-            legend_y += 20
-            if legend_y > h - 20: # Stop if running out of space
-                self.canvas.create_text(legend_start_x, legend_y + 5, text="...", anchor="w", fill="gray")
-                break
+    def on_mouse_move(self, event):
+        x, y = event.x, event.y
+        hovered = None
+        for s in self.slices:
+            dx = x - s['cx']
+            dy = s['cy'] - y 
+            dist = math.sqrt(dx*dx + dy*dy)
+            if dist <= s['r']:
+                angle = math.degrees(math.atan2(dy, dx))
+                if angle < 0: angle += 360
+                start, end = s['start'], s['end']
+                
+                # Check angle
+                if start < end:
+                    if start <= angle <= end: hovered = s
+                else:
+                    if angle >= start or angle <= end: hovered = s
+                if hovered: break
+        
+        if hovered: self.show_tooltip(x, y, hovered)
+        else: self.hide_tooltip()
+
+    def show_tooltip(self, x, y, slice_data):
+        code = slice_data['code']
+        desc = self.rule_descriptions.get(code, "No description available.")
+        
+        text = f"{code}\n"
+        text += f"Severity: {slice_data['severity'].upper()}\n"
+        text += f"Count: {slice_data['count']}\n"
+        text += f"----------------\n{desc}"
+        
+        tx = x + 20
+        ty = y + 20
+        tag = "tooltip_tag"
+        self.canvas.delete(tag)
+        
+        # Shadow/Bg
+        id_txt = self.canvas.create_text(tx + 5, ty + 5, text=text, anchor="nw", font=("Segoe UI", 9), fill="#202020", tags=tag)
+        bbox = self.canvas.bbox(id_txt)
+        x1, y1, x2, y2 = bbox
+        self.canvas.create_rectangle(x1-5, y1-3, x2+5, y2+3, fill="#F9F9F9", outline="#707070", tags=(tag, "bg"))
+        self.canvas.tag_raise(id_txt)
+
+    def hide_tooltip(self, event=None):
+        self.canvas.delete("tooltip_tag")

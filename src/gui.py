@@ -10,7 +10,7 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 import main as main_script
 from linter import SpectralRunner
-from charts import PieChart
+from charts import SemanticPieChart
 
 # Set Theme
 ctk.set_appearance_mode("System")  # Modes: "System" (standard), "Dark", "Light"
@@ -131,51 +131,65 @@ class OASGenApp(ctk.CTk):
         self.btn_lint.grid(row=0, column=2, padx=(10, 0))
 
         # Progress Bar (Indeterminate)
-        self.progress_val = ctk.CTkProgressBar(self.frame_val_top, width=200, mode="indeterminate")
-        self.progress_val.grid(row=0, column=3, padx=(20, 0), sticky="w")
-        self.progress_val.set(0) # Hide initially
+        # Progress Bar Removed as per user request
+
 
         # Main Layout: List vs Chart
         self.frame_val_content = ctk.CTkFrame(self.tab_val, fg_color="transparent")
-        self.frame_val_content.grid(row=1, column=0, columnspan=2, sticky="nsew", padx=10)
+        # Validation Tab Layout
+        
+        # Use PanedWindow for resizable Log Console
+        self.paned_val = tk.PanedWindow(self.tab_validation, orient="vertical", sashrelief="raised", bg="#d0d0d0")
+        self.paned_val.pack(fill="both", expand=True, padx=5, pady=5)
+        
+        # TOP PANE: Content (List + Chart)
+        self.frame_val_content = ctk.CTkFrame(self.paned_val)
+        self.paned_val.add(self.frame_val_content, minsize=200, sticky="nsew", stretch="always")
+        
         self.frame_val_content.grid_columnconfigure(0, weight=1)
         self.frame_val_content.grid_columnconfigure(1, weight=1)
-        self.frame_val_content.grid_rowconfigure(0, weight=3) # Content takes most space
-        self.frame_val_content.grid_rowconfigure(1, weight=1) # Log console takes less
+        self.frame_val_content.grid_rowconfigure(0, weight=1)
 
         self.frame_list = ctk.CTkScrollableFrame(self.frame_val_content, label_text="Issues List")
         self.frame_list.grid(row=0, column=0, sticky="nsew", padx=(0, 5), pady=5)
         
         self.frame_chart_container = ctk.CTkFrame(self.frame_val_content)
         self.frame_chart_container.grid(row=0, column=1, sticky="nsew", padx=(5, 0), pady=5)
-        self.chart = PieChart(self.frame_chart_container)
+        self.chart = SemanticPieChart(self.frame_chart_container)
         self.chart.pack(fill="both", expand=True, padx=10, pady=10)
 
-        # Log Console (Collapsed by default)
+        # BOTTOM PANE: Logs
+        self.val_log_frame = ctk.CTkFrame(self.paned_val)
+        self.paned_val.add(self.val_log_frame, minsize=50, sticky="nsew")
         
-        self.btn_toggle_log = ctk.CTkButton(self.frame_val_top, text="Show Logs", width=80, fg_color="gray", command=self.toggle_log)
-        self.btn_toggle_log.grid(row=0, column=4, padx=(10, 0))
+        # Log Header (Handle)
+        self.log_header = ctk.CTkFrame(self.val_log_frame, height=25, corner_radius=0, fg_color="gray80")
+        self.log_header.pack(fill="x", side="top")
+        
+        # Standard style toggle (Window-like)
+        self.btn_toggle_log = ctk.CTkButton(
+            self.log_header, text="▼ Logs", width=60, height=20, fg_color="transparent", 
+            text_color="black", hover_color="gray70", anchor="w", command=self.toggle_log
+        )
+        self.btn_toggle_log.pack(side="left", padx=5)
 
-        self.val_log_frame = ctk.CTkFrame(self.frame_val_content, height=100)
         self.val_log = ctk.CTkTextbox(self.val_log_frame, height=100, state="disabled", font=("Consolas", 11))
         self.val_log.pack(fill="both", expand=True)
-        
-        # Grid it initially? No, hide it.
-        # self.val_log_frame.grid(row=1, column=0, columnspan=2, sticky="nsew", pady=(10, 0))
-        self.log_visible = False
-        
+
         self.val_log_print("Ready.")
+        self.log_visible = True
         
+        # Initial Collapse
+        self.toggle_log()
+
     def toggle_log(self):
         if self.log_visible:
-            self.val_log_frame.grid_remove() # Use remove to remember options but unmap
-            self.frame_val_content.grid_rowconfigure(1, weight=0) # Collapse row
-            self.btn_toggle_log.configure(text="Show Logs")
+            self.val_log.pack_forget()
+            self.btn_toggle_log.configure(text="▶ Logs")
             self.log_visible = False
         else:
-            self.val_log_frame.grid(row=1, column=0, columnspan=2, sticky="nsew", pady=(10, 0))
-            self.frame_val_content.grid_rowconfigure(1, weight=1) # Expand row
-            self.btn_toggle_log.configure(text="Hide Logs")
+            self.val_log.pack(fill="both", expand=True)
+            self.btn_toggle_log.configure(text="▼ Logs")
             self.log_visible = True
 
     def val_log_print(self, msg):
@@ -273,7 +287,7 @@ class OASGenApp(ctk.CTk):
             return
             
         self.val_log_print(f"Starting validation for: {selected_name}")
-        self.progress_val.start() # Start pulsing animation
+        # self.progress_val.start() 
         
         for widget in self.frame_list.winfo_children():
             widget.destroy()
@@ -289,7 +303,8 @@ class OASGenApp(ctk.CTk):
             except Exception as e:
                  self.after(0, lambda: self.val_log_print(f"THREAD CRASH: {e}"))
             finally:
-                self.after(0, self.progress_val.stop)
+                pass 
+                # self.after(0, self.progress_val.stop)
 
         t = threading.Thread(target=validate_thread)
         t.start()
