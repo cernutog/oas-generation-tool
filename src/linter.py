@@ -25,17 +25,15 @@ class SpectralRunner:
         fd, temp_out = tempfile.mkstemp(suffix='.json')
         os.close(fd)
 
-        # Build command
-        # remove cmd /c prefix, rely on shell=True to find executable in path
-        command = f'{self.cmd} lint "{file_path}" -f json --output "{temp_out}"'
+        # Build command: cmd /c is required for Windows batch/npm scripts
+        command = f'cmd /c {self.cmd} lint "{file_path}" -f json --output "{temp_out}"'
         
         try:
-            # We don't check return code because Spectral returns 1 if issues are found.
-            # Added timeout to prevent hanging
-            subprocess.run(command, check=False, shell=True, capture_output=True, timeout=30)
+            # Run with timeout
+            subprocess.run(command, check=False, shell=True, capture_output=True, timeout=15)
             
             if not os.path.exists(temp_out) or os.path.getsize(temp_out) == 0:
-                 return {'success': False, 'error_msg': "Spectral failed to generate output (or timed out). check console/path.", 'summary': {}, 'details': []}
+                 return {'success': False, 'error_msg': "Spectral produced no output. Ensure 'spectral' is in PATH.", 'summary': {}, 'details': []}
 
             with open(temp_out, 'r', encoding='utf-8') as f:
                 results = json.load(f)
@@ -66,6 +64,8 @@ class SpectralRunner:
                 'raw_count': len(results)
             }
 
+        except subprocess.TimeoutExpired:
+             return {'success': False, 'error_msg': "Validation Timed Out (15s).", 'summary': {}, 'details': []}
         except Exception as e:
             return {'success': False, 'error_msg': str(e), 'summary': {}, 'details': []}
         finally:

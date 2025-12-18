@@ -115,15 +115,14 @@ class OASGenApp(ctk.CTk):
         # Top Bar
         self.frame_val_top = ctk.CTkFrame(self.tab_val, fg_color="transparent")
         self.frame_val_top.grid(row=0, column=0, columnspan=2, sticky="ew", padx=10, pady=10)
-        self.frame_val_top.grid_columnconfigure(1, weight=1) # Combo expands
         
         # Move file selector to the left/start
         self.lbl_sel = ctk.CTkLabel(self.frame_val_top, text="Select File:", font=ctk.CTkFont(weight="bold"))
         self.lbl_sel.grid(row=0, column=0, padx=(0, 10))
 
         self.file_map = {} # filename -> fullpath
-        self.cbo_files = ctk.CTkComboBox(self.frame_val_top, values=["No OAS files found"], command=self.on_file_select)
-        self.cbo_files.grid(row=0, column=1, sticky="ew")
+        self.cbo_files = ctk.CTkComboBox(self.frame_val_top, width=400, values=["No OAS files found"], command=self.on_file_select)
+        self.cbo_files.grid(row=0, column=1, sticky="w") # Fixed size, stick left
         
         # Status Label next
         self.lbl_status = ctk.CTkLabel(self.frame_val_top, text="", text_color="gray")
@@ -251,8 +250,12 @@ class OASGenApp(ctk.CTk):
             widget.destroy()
 
         def validate_thread():
-            result = self.linter.run_lint(selected_file)
-            self.after(0, lambda: self.show_results(result))
+            try:
+                result = self.linter.run_lint(selected_file)
+                self.after(0, lambda: self.show_results(result))
+            except Exception as e:
+                 # Catch thread crashes
+                 self.after(0, lambda: self.lbl_status.configure(text=f"Crash: {e}", text_color="red"))
 
         t = threading.Thread(target=validate_thread)
         t.start()
