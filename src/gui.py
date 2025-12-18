@@ -168,11 +168,13 @@ class OASGenApp(ctk.CTk):
         
     def toggle_log(self):
         if self.log_visible:
-            self.val_log_frame.grid_forget()
+            self.val_log_frame.grid_remove() # Use remove to remember options but unmap
+            self.frame_val_content.grid_rowconfigure(1, weight=0) # Collapse row
             self.btn_toggle_log.configure(text="Show Logs")
             self.log_visible = False
         else:
             self.val_log_frame.grid(row=1, column=0, columnspan=2, sticky="nsew", pady=(10, 0))
+            self.frame_val_content.grid_rowconfigure(1, weight=1) # Expand row
             self.btn_toggle_log.configure(text="Hide Logs")
             self.log_visible = True
 
@@ -340,7 +342,9 @@ class OASGenApp(ctk.CTk):
                 
                 # Row 2: Path
                 if item['path'] and item['path'] != "Root":
-                     ctk.CTkLabel(card, text=f"Path: {item['path']}", text_color="silver", font=("Consolas", 10), anchor="w").pack(fill="x", padx=5)
+                     # High contrast for path
+                     path_color = ("#333333", "#CCCCCC") # Dark in light mode, Light in dark mode
+                     ctk.CTkLabel(card, text=f"Path: {item['path']}", text_color=path_color, font=("Consolas", 10, "bold"), anchor="w").pack(fill="x", padx=5)
 
                 # Row 3: Message
                 ctk.CTkLabel(card, text=item['message'], anchor="w", justify="left", wraplength=350).pack(fill="x", padx=5, pady=(0, 5))
