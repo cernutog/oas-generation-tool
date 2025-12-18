@@ -108,6 +108,8 @@ class OASGenApp(ctk.CTk):
         # ==========================
         # TAB 2: VALIDATION
         # ==========================
+        self.linter = SpectralRunner() # Initialized here
+        
         self.tab_val.grid_columnconfigure(0, weight=1) # List
         self.tab_val.grid_columnconfigure(1, weight=1) # Chart
         self.tab_val.grid_rowconfigure(1, weight=1)
