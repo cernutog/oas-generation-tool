@@ -22,7 +22,14 @@ class SpectralRunner:
         os.close(fd)
         
         # Determine command - rely on shell=True to pick up .cmd/.exe from PATH
-        command = f'{self.cmd} lint "{file_path}" -f json --output "{temp_out}"'
+        # Explicitly use the local .spectral.yaml to avoid "No ruleset found"
+        ruleset_path = os.path.abspath(".spectral.yaml")
+        if not os.path.exists(ruleset_path):
+             # Fallback if file missing (though we just created it)
+             command = f'{self.cmd} lint "{file_path}" -f json --output "{temp_out}"' 
+        else:
+             command = f'{self.cmd} lint "{file_path}" --ruleset "{ruleset_path}" -f json --output "{temp_out}"'
+             
         log(f"Executing: {command}")
         
         try:
