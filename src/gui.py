@@ -115,17 +115,23 @@ class OASGenApp(ctk.CTk):
         # Top Bar
         self.frame_val_top = ctk.CTkFrame(self.tab_val, fg_color="transparent")
         self.frame_val_top.grid(row=0, column=0, columnspan=2, sticky="ew", padx=10, pady=10)
-        self.frame_val_top.grid_columnconfigure(2, weight=1) # Combo expands
+        self.frame_val_top.grid_columnconfigure(1, weight=1) # Combo expands
         
-        self.btn_lint = ctk.CTkButton(self.frame_val_top, text="Run Validation (Spectral)", command=self.run_validation)
-        self.btn_lint.grid(row=0, column=0, padx=(0, 20))
-        
-        self.lbl_status = ctk.CTkLabel(self.frame_val_top, text="No validation run yet.", text_color="gray")
-        self.lbl_status.grid(row=0, column=1, sticky="w")
-        
+        # Move file selector to the left/start
+        self.lbl_sel = ctk.CTkLabel(self.frame_val_top, text="Select File:", font=ctk.CTkFont(weight="bold"))
+        self.lbl_sel.grid(row=0, column=0, padx=(0, 10))
+
         self.file_map = {} # filename -> fullpath
-        self.cbo_files = ctk.CTkComboBox(self.frame_val_top, values=["No OAS files found"])
-        self.cbo_files.grid(row=0, column=2, sticky="ew", padx=(20, 0))
+        self.cbo_files = ctk.CTkComboBox(self.frame_val_top, values=["No OAS files found"], command=self.on_file_select)
+        self.cbo_files.grid(row=0, column=1, sticky="ew")
+        
+        # Status Label next
+        self.lbl_status = ctk.CTkLabel(self.frame_val_top, text="", text_color="gray")
+        self.lbl_status.grid(row=0, column=2, padx=10, sticky="w")
+        
+        # Refresh Button (Small)
+        self.btn_lint = ctk.CTkButton(self.frame_val_top, text="↻ Refresh", width=80, command=self.run_validation)
+        self.btn_lint.grid(row=0, column=3, padx=(10, 0))
 
         # Left: Analytic View (Scrollable Frame with Labels)
         self.frame_list = ctk.CTkScrollableFrame(self.tab_val, label_text="Issues List")
@@ -220,9 +226,14 @@ class OASGenApp(ctk.CTk):
             self.cbo_files.configure(values=display_names)
             self.cbo_files.set(display_names[0])
             self.btn_lint.configure(state="normal")
+             # Trigger validation for the first file if available
+            self.run_validation()
         else:
             self.cbo_files.configure(values=["No OAS files found"])
             self.cbo_files.set("No OAS files found")
+            
+    def on_file_select(self, value):
+        self.run_validation()
 
     def run_validation(self):
         selected_name = self.cbo_files.get()

@@ -25,17 +25,17 @@ class SpectralRunner:
         fd, temp_out = tempfile.mkstemp(suffix='.json')
         os.close(fd)
 
-        # Build command: cmd /c spectral lint "file" -f json --output "temp_out"
-        # We use cmd /c to bypass PowerShell ExecutionPolicy issues on Windows
-        command = f'cmd /c {self.cmd} lint "{file_path}" -f json --output "{temp_out}"'
+        # Build command
+        # remove cmd /c prefix, rely on shell=True to find executable in path
+        command = f'{self.cmd} lint "{file_path}" -f json --output "{temp_out}"'
         
         try:
-            # We don't check return code because Spectral returns 1 if issues are found, which is expected.
-            subprocess.run(command, check=False, shell=True, capture_output=True)
+            # We don't check return code because Spectral returns 1 if issues are found.
+            # Added timeout to prevent hanging
+            subprocess.run(command, check=False, shell=True, capture_output=True, timeout=30)
             
             if not os.path.exists(temp_out) or os.path.getsize(temp_out) == 0:
-                 # If temp file is empty, maybe there was a syntax error in spec preventing JSON gen
-                 return {'success': False, 'error_msg': "Spectral failed to generate output.", 'summary': {}, 'details': []}
+                 return {'success': False, 'error_msg': "Spectral failed to generate output (or timed out). check console/path.", 'summary': {}, 'details': []}
 
             with open(temp_out, 'r', encoding='utf-8') as f:
                 results = json.load(f)
