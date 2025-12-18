@@ -7,36 +7,48 @@ class SpectralRunner:
     def __init__(self, spectral_cmd="spectral"):
         self.cmd = spectral_cmd
 
-    def run_lint(self, file_path):
+    def run_lint(self, file_path, log_callback=None):
         """
-        Runs spectral lint on the given file and returns the parsed results.
-        Returns:
-            dict: {
-                'success': bool,
-                'summary': {'error': 0, 'warning': 0, 'info': 0, 'hint': 0},
-                'details': [list of result objects],
-                'error_msg': str (if execution failed)
-            }
+        Runs spectral lint on the given file.
         """
-        if not os.path.exists(file_path):
-            return {'success': False, 'error_msg': f"File not found: {file_path}", 'summary': {}, 'details': []}
+        def log(msg):
+            if log_callback: log_callback(msg)
 
-        # Create a temp file for JSON output
+        if not os.path.exists(file_path):
+            log(f"Error: File not found: {file_path}")
+            return {'success': False, 'error_msg': f"File not found", 'summary': {}, 'details': []}
+
         fd, temp_out = tempfile.mkstemp(suffix='.json')
         os.close(fd)
-
-        # Build command: cmd /c is required for Windows batch/npm scripts
-        command = f'cmd /c {self.cmd} lint "{file_path}" -f json --output "{temp_out}"'
+        
+        # Determine command - rely on shell=True to pick up .cmd/.exe from PATH
+        command = f'{self.cmd} lint "{file_path}" -f json --output "{temp_out}"'
+        log(f"Executing: {command}")
         
         try:
-            # Run with timeout
-            subprocess.run(command, check=False, shell=True, capture_output=True, timeout=15)
+            # use stdin=DEVNULL to ensure it never waits for input
+            process = subprocess.run(
+                command, 
+                shell=True, 
+                capture_output=True, 
+                text=True, 
+                timeout=20,
+                stdin=subprocess.DEVNULL
+            )
+            
+            log(f"Process ended. Return Code: {process.returncode}")
+            if process.stderr:
+                log(f"STDERR: {process.stderr[:200]}...") # Log first 200 chars of error
             
             if not os.path.exists(temp_out) or os.path.getsize(temp_out) == 0:
-                 return {'success': False, 'error_msg': "Spectral produced no output. Ensure 'spectral' is in PATH.", 'summary': {}, 'details': []}
+                 log("Error: Output file empty or missing.")
+                 return {'success': False, 'error_msg': "Spectral output missing.", 'summary': {}, 'details': []}
 
+            log("Parsing JSON output...")
             with open(temp_out, 'r', encoding='utf-8') as f:
                 results = json.load(f)
+            
+            log(f"Found {len(results)} issues.")
             
             # Analyze results
             summary = {'error': 0, 'warning': 0, 'info': 0, 'hint': 0}
@@ -65,8 +77,10 @@ class SpectralRunner:
             }
 
         except subprocess.TimeoutExpired:
-             return {'success': False, 'error_msg': "Validation Timed Out (15s).", 'summary': {}, 'details': []}
+             log("Error: Timeout Expired!")
+             return {'success': False, 'error_msg': "Timeout (20s)", 'summary': {}, 'details': []}
         except Exception as e:
+            log(f"Exception: {str(e)}")
             return {'success': False, 'error_msg': str(e), 'summary': {}, 'details': []}
         finally:
             if os.path.exists(temp_out):

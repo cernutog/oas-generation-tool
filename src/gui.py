@@ -116,35 +116,50 @@ class OASGenApp(ctk.CTk):
         self.frame_val_top = ctk.CTkFrame(self.tab_val, fg_color="transparent")
         self.frame_val_top.grid(row=0, column=0, columnspan=2, sticky="ew", padx=10, pady=10)
         
-        # Move file selector to the left/start
+        # File Selector
         self.lbl_sel = ctk.CTkLabel(self.frame_val_top, text="Select File:", font=ctk.CTkFont(weight="bold"))
         self.lbl_sel.grid(row=0, column=0, padx=(0, 10))
 
-        self.file_map = {} # filename -> fullpath
-        self.cbo_files = ctk.CTkComboBox(self.frame_val_top, width=400, values=["No OAS files found"], command=self.on_file_select)
-        self.cbo_files.grid(row=0, column=1, sticky="w") # Fixed size, stick left
+        self.file_map = {} 
+        self.cbo_files = ctk.CTkComboBox(self.frame_val_top, width=300, values=["No OAS files found"], command=self.on_file_select)
+        self.cbo_files.grid(row=0, column=1, sticky="w")
         
-        # Status Label next
-        self.lbl_status = ctk.CTkLabel(self.frame_val_top, text="", text_color="gray")
-        self.lbl_status.grid(row=0, column=2, padx=10, sticky="w")
-        
-        # Refresh Button (Small)
+        # Refresh Button
         self.btn_lint = ctk.CTkButton(self.frame_val_top, text="↻ Refresh", width=80, command=self.run_validation)
-        self.btn_lint.grid(row=0, column=3, padx=(10, 0))
+        self.btn_lint.grid(row=0, column=2, padx=(10, 0))
 
-        # Left: Analytic View (Scrollable Frame with Labels)
-        self.frame_list = ctk.CTkScrollableFrame(self.tab_val, label_text="Issues List")
-        self.frame_list.grid(row=1, column=0, sticky="nsew", padx=10, pady=10)
+        # Progress Bar (Indeterminate)
+        self.progress_val = ctk.CTkProgressBar(self.frame_val_top, width=200, mode="indeterminate")
+        self.progress_val.grid(row=0, column=3, padx=(20, 0), sticky="w")
+        self.progress_val.set(0) # Hide initially
+
+        # Main Layout: List vs Chart
+        self.frame_val_content = ctk.CTkFrame(self.tab_val, fg_color="transparent")
+        self.frame_val_content.grid(row=1, column=0, columnspan=2, sticky="nsew", padx=10)
+        self.frame_val_content.grid_columnconfigure(0, weight=1)
+        self.frame_val_content.grid_columnconfigure(1, weight=1)
+        self.frame_val_content.grid_rowconfigure(0, weight=3) # Content takes most space
+        self.frame_val_content.grid_rowconfigure(1, weight=1) # Log console takes less
+
+        self.frame_list = ctk.CTkScrollableFrame(self.frame_val_content, label_text="Issues List")
+        self.frame_list.grid(row=0, column=0, sticky="nsew", padx=(0, 5), pady=5)
         
-        # Right: Pie Chart
-        self.frame_chart_container = ctk.CTkFrame(self.tab_val) # Container for bg color
-        self.frame_chart_container.grid(row=1, column=1, sticky="nsew", padx=10, pady=10)
-        self.frame_chart_container.grid_rowconfigure(0, weight=1) 
-        self.frame_chart_container.grid_columnconfigure(0, weight=1)
-
+        self.frame_chart_container = ctk.CTkFrame(self.frame_val_content)
+        self.frame_chart_container.grid(row=0, column=1, sticky="nsew", padx=(5, 0), pady=5)
         self.chart = PieChart(self.frame_chart_container)
-        self.chart.pack(fill="both", expand=True, padx=20, pady=20)
+        self.chart.pack(fill="both", expand=True, padx=10, pady=10)
+
+        # Log Console
+        self.val_log = ctk.CTkTextbox(self.frame_val_content, height=100, state="disabled", font=("Consolas", 11))
+        self.val_log.grid(row=1, column=0, columnspan=2, sticky="nsew", pady=(10, 0))
+        self.val_log_print("Ready.")
         
+    def val_log_print(self, msg):
+        self.val_log.configure(state="normal")
+        self.val_log.insert("end", f"> {msg}\n")
+        self.val_log.see("end")
+        self.val_log.configure(state="disabled")
+
     def browse_dir(self):
         directory = filedialog.askdirectory()
         if directory:
@@ -167,9 +182,6 @@ class OASGenApp(ctk.CTk):
             return
 
         self.btn_gen.configure(state="disabled", text="GENERATING...")
-        self.log_area.configure(state="normal")
-        self.log_area.delete("1.0", "end")
-        self.log_area.configure(state="disabled")
         self.log("Starting generation process...")
         
         t = threading.Thread(target=self.run_process, args=(base_dir, gen_30, gen_31))
@@ -181,9 +193,7 @@ class OASGenApp(ctk.CTk):
             
             def gui_logger(msg):
                 self.after(0, self.log, msg)
-                # Capture file paths from logs if possible or construct them
                 if "Writing OAS" in msg:
-                    # Simple extraction of path from log message
                     parts = msg.split(": ")
                     if len(parts) > 1:
                          self.last_generated_files.append(parts[1].strip())
@@ -201,11 +211,9 @@ class OASGenApp(ctk.CTk):
 
     def update_file_list(self):
         files_to_show = []
-        # Combine last generated with finding existing ones
         candidates = list(self.last_generated_files)
         
         if not candidates:
-             # Try to find default files in generated folder
              base_dir = self.entry_dir.get()
              gen_dir = os.path.join(base_dir, "generated")
              if os.path.exists(gen_dir):
@@ -213,7 +221,6 @@ class OASGenApp(ctk.CTk):
                      if f.endswith(".yaml") or f.endswith(".json"):
                          candidates.append(os.path.join(gen_dir, f))
         
-        # Build Map
         self.file_map = {}
         display_names = []
         for path in candidates:
@@ -225,7 +232,6 @@ class OASGenApp(ctk.CTk):
             self.cbo_files.configure(values=display_names)
             self.cbo_files.set(display_names[0])
             self.btn_lint.configure(state="normal")
-             # Trigger validation for the first file if available
             self.run_validation()
         else:
             self.cbo_files.configure(values=["No OAS files found"])
@@ -239,23 +245,27 @@ class OASGenApp(ctk.CTk):
         selected_file = self.file_map.get(selected_name)
         
         if not selected_file or not os.path.exists(selected_file):
-            self.lbl_status.configure(text="File not found!", text_color="red")
+            self.val_log_print("File not found or not selected.")
             return
             
-        self.lbl_status.configure(text="Running Spectral...", text_color="orange")
-        self.frame_list.configure(label_text=f"Issues List - {selected_name}")
+        self.val_log_print(f"Starting validation for: {selected_name}")
+        self.progress_val.start() # Start pulsing animation
         
-        # Clear list
         for widget in self.frame_list.winfo_children():
             widget.destroy()
 
         def validate_thread():
             try:
-                result = self.linter.run_lint(selected_file)
+                # Capture logs from linter
+                def thread_logger(msg):
+                    self.after(0, lambda: self.val_log_print(msg))
+                    
+                result = self.linter.run_lint(selected_file, log_callback=thread_logger)
                 self.after(0, lambda: self.show_results(result))
             except Exception as e:
-                 # Catch thread crashes
-                 self.after(0, lambda: self.lbl_status.configure(text=f"Crash: {e}", text_color="red"))
+                 self.after(0, lambda: self.val_log_print(f"THREAD CRASH: {e}"))
+            finally:
+                self.after(0, self.progress_val.stop)
 
         t = threading.Thread(target=validate_thread)
         t.start()
