@@ -54,7 +54,7 @@ class OASGenApp(ctk.CTk):
         self.lbl_title = ctk.CTkLabel(self.frame_header, text="OAS Generator", font=ctk.CTkFont(size=20, weight="bold"))
         self.lbl_title.pack(padx=20, pady=15, side="left")
         
-        self.lbl_version = ctk.CTkLabel(self.frame_header, text="v1.2", font=ctk.CTkFont(size=12))
+        self.lbl_version = ctk.CTkLabel(self.frame_header, text="v1.2.1", font=ctk.CTkFont(size=12))
         self.lbl_version.pack(padx=20, pady=15, side="right")
 
         # --- Tab View ---

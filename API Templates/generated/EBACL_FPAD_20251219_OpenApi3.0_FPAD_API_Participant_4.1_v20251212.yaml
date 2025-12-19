@@ -5,8 +5,6 @@ info:
   description: FPAD API for interacting with the FPAD functionality for Prevention and Detection assessments.
   contact:
     name: EBA CLEARING
-  release: v20251212
-  filename_pattern: EBACL_FPAD_<current_date>_OpenApi<oas_version>_<customization>FPAD_API_Participant_<api_version>_<release>.yaml
 servers:
   - url: /fpad
     description: Server base path

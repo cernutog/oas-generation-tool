@@ -112,11 +112,16 @@ def generate_oas(base_dir, gen_30=True, gen_31=True, gen_swift=False, log_callba
         return fname.strip()
 
 
+    # Prepare Clean Info (Exclude internal fields)
+    clean_info = info_data.copy()
+    for internal_key in ["release", "filename_pattern"]:
+        clean_info.pop(internal_key, None)
+
     # 4. Generate OAS 3.0
     if gen_30:
         log_callback("Generating OAS 3.0...")
         generator_30 = OASGenerator(version="3.0.0")
-        generator_30.build_info(info_data)
+        generator_30.build_info(clean_info)
         if tags_data:
             generator_30.oas["tags"] = tags_data
         if servers_data:
@@ -147,7 +152,7 @@ def generate_oas(base_dir, gen_30=True, gen_31=True, gen_swift=False, log_callba
     if gen_31:
         log_callback("Generating OAS 3.1...")
         generator_31 = OASGenerator(version="3.1.0")
-        generator_31.build_info(info_data)
+        generator_31.build_info(clean_info)
         if tags_data:
             generator_31.oas["tags"] = tags_data
         if servers_data:
@@ -172,7 +177,7 @@ def generate_oas(base_dir, gen_30=True, gen_31=True, gen_swift=False, log_callba
         # SWIFT OAS 3.0
         log_callback("Generating SWIFT OAS 3.0...")
         sw_gen_30 = OASGenerator(version="3.0.0")
-        sw_gen_30.build_info(info_data)
+        sw_gen_30.build_info(clean_info)
         if tags_data: sw_gen_30.oas["tags"] = tags_data
         if servers_data: sw_gen_30.oas["servers"] = servers_data
         if security_req: sw_gen_30.oas["security"] = security_req
@@ -199,7 +204,7 @@ def generate_oas(base_dir, gen_30=True, gen_31=True, gen_swift=False, log_callba
         # SWIFT OAS 3.1
         log_callback("Generating SWIFT OAS 3.1...")
         sw_gen_31 = OASGenerator(version="3.1.0")
-        sw_gen_31.build_info(info_data)
+        sw_gen_31.build_info(clean_info)
         if tags_data: sw_gen_31.oas["tags"] = tags_data
         if servers_data: sw_gen_31.oas["servers"] = servers_data
         if security_req: sw_gen_31.oas["security"] = security_req
