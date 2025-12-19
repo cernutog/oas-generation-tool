@@ -17,23 +17,31 @@ from charts import SemanticPieChart
 ctk.set_appearance_mode("System")  # Modes: "System" (standard), "Dark", "Light"
 ctk.set_default_color_theme("blue")  # Themes: "blue" (standard), "green", "dark-blue"
 
+def resource_path(relative_path):
+    """ Get absolute path to resource, works for dev and for PyInstaller """
+    try:
+        # PyInstaller creates a temp folder and stores path in _MEIPASS
+        base_path = sys._MEIPASS
+    except Exception:
+        base_path = os.path.abspath(".")
+        
+    return os.path.join(base_path, relative_path)
+
 class OASGenApp(ctk.CTk):
     def __init__(self):
         super().__init__()
 
+        # Window Setup
         self.title("OAS Generation Tool")
-        self.geometry("900x650") # Increased size for charts
+        self.geometry("1100x700")
 
-        # Set Window Icon
-        icon_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "icon.ico")
-        if not os.path.exists(icon_path):
-            icon_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "icon.ico")
-        
-        if os.path.exists(icon_path):
-            try:
-                self.iconbitmap(icon_path)
-            except Exception:
-                pass 
+        # Icon Setup
+        try:
+            icon_file = resource_path("icon.ico")
+            if os.path.exists(icon_file):
+                self.iconbitmap(icon_file)
+        except Exception:
+            pass 
         
         # Grid Layout Configuration
         self.grid_columnconfigure(0, weight=1)
