@@ -93,7 +93,11 @@ class OASGenApp(ctk.CTk):
         
         self.var_31 = ctk.BooleanVar(value=True)
         self.chk_31 = ctk.CTkCheckBox(self.frame_opts, text="Generate OAS 3.1", variable=self.var_31)
-        self.chk_31.pack(side="left")
+        self.chk_31.pack(side="left", padx=(0, 20))
+
+        self.var_swift = ctk.BooleanVar(value=False)
+        self.chk_swift = ctk.CTkCheckBox(self.frame_opts, text="Generate SWIFT OAS", variable=self.var_swift)
+        self.chk_swift.pack(side="left")
 
         # Generate Button layout on the right of opts? Or below? Below logs? 
         # Let's keep it prominent.
@@ -238,6 +242,7 @@ class OASGenApp(ctk.CTk):
         base_dir = self.entry_dir.get()
         gen_30 = self.var_30.get()
         gen_31 = self.var_31.get()
+        gen_swift = self.var_swift.get()
         
         if not base_dir:
             self.log("ERROR: Please select a directory.")
@@ -246,10 +251,10 @@ class OASGenApp(ctk.CTk):
         self.btn_gen.configure(state="disabled", text="GENERATING...")
         self.log("Starting generation process...")
         
-        t = threading.Thread(target=self.run_process, args=(base_dir, gen_30, gen_31))
+        t = threading.Thread(target=self.run_process, args=(base_dir, gen_30, gen_31, gen_swift))
         t.start()
         
-    def run_process(self, base_dir, gen_30, gen_31):
+    def run_process(self, base_dir, gen_30, gen_31, gen_swift):
         try:
             self.last_generated_files = [] 
             
@@ -261,7 +266,7 @@ class OASGenApp(ctk.CTk):
                          self.last_generated_files.append(parts[1].strip())
                          self.after(0, self.update_file_list)
                          
-            main_script.generate_oas(base_dir, gen_30=gen_30, gen_31=gen_31, log_callback=gui_logger)
+            main_script.generate_oas(base_dir, gen_30=gen_30, gen_31=gen_31, gen_swift=gen_swift, log_callback=gui_logger)
             
         except Exception as e:
             self.after(0, self.log, f"CRITICAL ERROR: {e}")

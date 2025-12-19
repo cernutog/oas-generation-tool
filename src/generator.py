@@ -1371,3 +1371,142 @@ class OASGenerator:
                 new_d[k] = v
         
         return new_d
+
+    def apply_swift_customization(self):
+        """
+        Applies SWIFT-specific customizations (Hardcoded as per exception).
+        """
+        # 1. SERVERS
+        self.oas["servers"] = [
+            {
+                "url": "https://api.swiftnet.sipn.swift.com/ebacl-fpad/v1",
+                "description": "Live environment"
+            },
+            {
+                "url": "https://api-test.swiftnet.sipn.swift.com/ebacl-fpad-pilot/v1",
+                "description": "Test environment"
+            }
+        ]
+
+        # 2. GLOBAL SECURITY
+        self.oas["security"] = [{"oauthBearerToken": []}]
+
+        # 3. COMPONENTS
+        if "components" not in self.oas: self.oas["components"] = {}
+        comps = self.oas["components"]
+
+        # 3.1 Security Schemes
+        if "securitySchemes" not in comps: comps["securitySchemes"] = {}
+        comps["securitySchemes"]["oauthBearerToken"] = {
+            "type": "http",
+            "scheme": "bearer",
+            "bearerFormat": "opaque OAuth 2.0",
+            "description": "The access token obtained as a result of OAuth 2.0 flows. SWIFT supports two OAuth grant types depending on the API service.\n* JWT-Bearer grant type [RFC 7523](https://tools.ietf.org/html/rfc7523)\n* Password grant type\n\nThis API uses JWT-Bearer grant type.\n\nPlease visit [SWIFT OAuth Token API](https://developer.swift.com/swift-oauth-token-api) page for more information and examples on how to generate an OAuth token.\n\nIn this declaration only the basic security element to transport the bearer token of an OAuth2 process is declared.\n"
+        }
+
+        # 3.2 Parameters (ivUserKey, ivUserBic)
+        if "parameters" not in comps: comps["parameters"] = {}
+        
+        comps["parameters"]["ivUserKey"] = {
+            "name": "ivUserKey",
+            "in": "header",
+            "description": "The subscription key of a Participant. cn=<SSO+BIC+UserId+T>,o=BIC8,o=swift. SSO is a fixed string, last char is for environment (P for production and T for test) eg SSOUNCRITMMAPI12345P, o=uncritmm,o=swift",
+            "required": True,
+            "schema": {"type": "string"}
+        }
+        
+        comps["parameters"]["ivUserBic"] = {
+            "name": "ivUserBic",
+            "in": "header",
+            "description": "BIC8 identifier",
+            "required": True,
+            "schema": {
+                "type": "string",
+                "pattern": "[A-Z0-9]{4,4}[A-Z]{2,2}[A-Z0-9]{2,2}",
+                "example": "IPSDID21"
+            }
+        }
+
+        # 3.3 Headers (X-Request-ID)
+        if "headers" not in comps: comps["headers"] = {}
+        comps["headers"]["X-Request-ID"] = {
+            "description": "Specify an unique end to end tracking request ID. The element will be populated by the SWIFT API gateway",
+            "schema": {"type": "string"}
+        }
+
+        # 3.4 Schemas (Errors, ErrorMessage)
+        if "schemas" not in comps: comps["schemas"] = {}
+        
+        comps["schemas"]["Errors"] = {
+            "description": "Container to return multiple ErrorMessage object. Collection of error can be useful when API needs to return multiple errors, for example validation errors. When the response code conveys application-specific functional semantics and consumer can parse machine-readable error code, this block can be useful. The error response must contain at least one error object.",
+            "type": "array",
+            "items": {"$ref": "#/components/schemas/ErrorMessage"}
+        }
+        
+        comps["schemas"]["ErrorMessage"] = {
+            "description": "Custom error schema to support detailed error message.",
+            "type": "object",
+            "additionalProperties": False,
+            "required": ["code", "severity", "text"],
+            "properties": {
+                "severity": {
+                    "description": "Specifies the severity of the error.",
+                    "type": "string",
+                    "enum": ["Fatal", "Transient", "Logic"]
+                },
+                "code": {
+                    "description": "Specifies the custom error code as defined by the service provider.",
+                    "type": "string",
+                    "minLength": 3,
+                    "maxLength": 70
+                },
+                "text": {
+                    "description": "Specifies the detail error message identifying the cause of the error.",
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 255
+                },
+                "user_message": {
+                    "description": "A human-readable text describing the error.",
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 255
+                },
+                "more_info": {
+                    "description": "Specifies an URL to find more information about the error.",
+                    "type": "string",
+                    "format": "uri"
+                }
+            }
+        }
+
+        # 4. PATHS MODIFICATIONS
+        if "paths" in self.oas:
+            for path_url, methods in self.oas["paths"].items():
+                for method, op in methods.items():
+                    if method.startswith("x-") or not isinstance(op, dict): continue
+                    
+                    # 4.1 Inject Parameters
+                    if "parameters" not in op: op["parameters"] = []
+                    # Check duplicates? Assuming blindly add for now as they are new
+                    op["parameters"].append({"$ref": "#/components/parameters/ivUserKey"})
+                    op["parameters"].append({"$ref": "#/components/parameters/ivUserBic"})
+
+                    # 4.2 Inject Headers to Responses (X-Request-ID)
+                    # 4.3 Polymorphic 400
+                    if "responses" in op:
+                        for code, resp in op["responses"].items():
+                            # X-Request-ID
+                            if "headers" not in resp: resp["headers"] = {}
+                            resp["headers"]["X-Request-ID"] = {"$ref": "#/components/headers/X-Request-ID"}
+                            
+                            # Polymorphic 400
+                            if str(code) == '400':
+                                if "content" in resp and "application/json" in resp["content"]:
+                                     # Force oneOf
+                                     resp["content"]["application/json"]["schema"] = {
+                                         "oneOf": [
+                                             {"$ref": "#/components/schemas/ErrorResponse"},
+                                             {"$ref": "#/components/schemas/Errors"}
+                                         ]
+                                     }

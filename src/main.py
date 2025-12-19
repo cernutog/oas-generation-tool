@@ -13,7 +13,7 @@ def find_best_match_file(target, directory, files_list):
     # Delegate to parser's logic or reimplement simple one
     return parser.find_best_match_file(target, directory, files_list)
 
-def generate_oas(base_dir, gen_30=True, gen_31=True, log_callback=print):
+def generate_oas(base_dir, gen_30=True, gen_31=True, gen_swift=False, log_callback=print):
     """
     Main execution function.
     base_dir: Directory containing '$index.xlsm'
@@ -132,6 +132,54 @@ def generate_oas(base_dir, gen_30=True, gen_31=True, log_callback=print):
         log_callback(f"Writing OAS 3.1 to: {out_31}")
         with open(out_31, "w", encoding="utf-8") as f:
             f.write(generator_31.get_yaml())
+
+    # 6. Generate SWIFT OAS (Customized)
+    if gen_swift:
+        # SWIFT OAS 3.0
+        log_callback("Generating SWIFT OAS 3.0...")
+        sw_gen_30 = OASGenerator(version="3.0.0")
+        sw_gen_30.build_info(info_data)
+        if tags_data: sw_gen_30.oas["tags"] = tags_data
+        if servers_data: sw_gen_30.oas["servers"] = servers_data
+        if security_req: sw_gen_30.oas["security"] = security_req
+            
+        sw_gen_30.build_paths(paths_list, operations_details)
+        if security_schemes:
+            if "securitySchemes" not in components_data: components_data["securitySchemes"] = {}
+            components_data["securitySchemes"].update(security_schemes)
+            
+        sw_gen_30.build_components(components_data)
+        sw_gen_30.build_paths(paths_list, operations_details)
+        
+        # APPLY CUSTOMIZATION
+        sw_gen_30.apply_swift_customization()
+
+        gen_dir = os.path.join(output_dir, "generated")
+        os.makedirs(gen_dir, exist_ok=True)
+
+        out_sw_30 = os.path.join(gen_dir, "generated_oas_3.0_SWIFT.yaml")
+        log_callback(f"Writing SWIFT OAS 3.0 to: {out_sw_30}")
+        with open(out_sw_30, "w", encoding="utf-8") as f:
+            f.write(sw_gen_30.get_yaml())
+
+        # SWIFT OAS 3.1
+        log_callback("Generating SWIFT OAS 3.1...")
+        sw_gen_31 = OASGenerator(version="3.1.0")
+        sw_gen_31.build_info(info_data)
+        if tags_data: sw_gen_31.oas["tags"] = tags_data
+        if servers_data: sw_gen_31.oas["servers"] = servers_data
+        if security_req: sw_gen_31.oas["security"] = security_req
+            
+        sw_gen_31.build_components(components_data)
+        sw_gen_31.build_paths(paths_list, operations_details)
+        
+        # APPLY CUSTOMIZATION
+        sw_gen_31.apply_swift_customization()
+
+        out_sw_31 = os.path.join(gen_dir, "generated_oas_3.1_SWIFT.yaml")
+        log_callback(f"Writing SWIFT OAS 3.1 to: {out_sw_31}")
+        with open(out_sw_31, "w", encoding="utf-8") as f:
+            f.write(sw_gen_31.get_yaml())
     
     log_callback("Done!")
 
