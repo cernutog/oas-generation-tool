@@ -237,3 +237,40 @@ User Requirement: "Bad Request" examples often contain intentional schema violat
 #### 3. Spectral on Windows
 **Issue**: Linter failing with "Invalid ruleset provided".
 **Fix**: Forced inclusion of `os.path.normpath` for ruleset paths to handle Windows backslashes correctly.
+
+## Release v1.2.2: UI, Ordering, and Traceability
+
+### Problem Statement
+User feedback identified several issues in the v1.2.x series:
+1. **AES**: The "pie chart" vector validation icon was confusing. User requested a simple Unicode checkmark.
+2. **Schema Ordering**: The `example` property in YAML schemas was not consistently placed at the end of the object, despite previous attempts.
+3. **SWIFT Parameters**: `ivUserKey` and `ivUserBic` were not correctly ordered at the top of the parameter list.
+4. **Traceability**: SWIFT OAS files lacked a clear reference to the source non-SWIFT OAS file they were derived from.
+5. **Shared State**: Generating multiple SWIFT versions (3.0, 3.1) in one session caused description notes to accumulate inappropriately.
+
+### Solutions Implemented
+
+#### 1. Recursive Schema Re-ordering (Robustness)
+**Approach**: Instead of relying on insertion order or shallow sorts, implemented a **recursive** post-processing step (`_recursive_schema_fix`).
+- Traversing the entire generated OAS dictionary immediately before YAML dumping.
+- For every dictionary found, if it contains `example` or `examples`, it creates a new `OrderedDict`.
+- All keys *except* examples are added first.
+- Example keys are added *last*.
+- The original dictionary is destructively updated (`clear()` + `update()`) to ensure no reference breakage.
+**Result**: Verified by test script (`tests/verify_example_order.py`); `example` is rigorously at the end.
+
+#### 2. Clean State for Generator (Fixing Pollution)
+**Problem**: `OASGenerator.build_info` was assigning the input `info` dictionary by reference.
+**Fix**: Updated `build_info` to use `copy.deepcopy(info_data)`.
+**Result**: SWIFT customizations (allocating "Based on..." notes) now affect only the local copy, preventing bleed-over between 3.0 and 3.1 generations.
+
+#### 3. SWIFT Source Traceability
+**Feature**: Modified `apply_swift_customization` to accept `source_filename`.
+- Appends `\n\nBased on {filename}` to `info.description`.
+- `main.py` updated to capture standard filenames during generation and pass them to the SWIFT generator.
+
+#### 4. UI Simplification
+**Change**: Replaced complex `tkinter` canvas drawing logic in `Src/charts.py` with a simple text label rendering a green Unicode Checkmark (✔).
+
+### Conclusion
+v1.2.2 consolidates these fixes into a stable release, verified by both automated scripts and manual inspection of generated artifacts.
