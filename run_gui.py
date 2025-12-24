@@ -1,5 +1,11 @@
 import os
 import sys
+import multiprocessing
+
+# Required for PyInstaller to properly handle multiprocessing
+if __name__ == "__main__":
+    multiprocessing.freeze_support()
+
 import customtkinter as ctk
 
 # Ensure 'src' is importable
@@ -8,10 +14,10 @@ if current_dir not in sys.path:
     sys.path.insert(0, current_dir)
 
 try:
+    import src.redoc_gen # Force inclusion
     from src.gui import OASGenApp
 except ImportError as e:
     print(f"Failed to import app: {e}")
-    # Fallback for frozen app if src structure is flattened (should not happen with this setup)
     try:
         from gui import OASGenApp
     except ImportError:
@@ -23,3 +29,4 @@ if __name__ == "__main__":
 
     app = OASGenApp()
     app.mainloop()
+

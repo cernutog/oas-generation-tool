@@ -20,6 +20,8 @@ from . import main as main_script
 from .linter import SpectralRunner
 from .charts import SemanticPieChart
 from .redoc_gen import RedocGenerator
+from .preferences import PreferencesManager
+from .preferences_dialog import PreferencesDialog
 from chlorophyll import CodeView
 import pygments.lexers
 
@@ -63,6 +65,19 @@ class OASGenApp(ctk.CTk):
         except Exception:
             pass 
         
+        # Initialize Preferences Manager
+        self.prefs_manager = PreferencesManager()
+        
+        # Apply saved window geometry if available
+        if self.prefs_manager.get("remember_window_pos") and self.prefs_manager.get("window_geometry"):
+            try:
+                self.geometry(self.prefs_manager.get("window_geometry"))
+            except:
+                pass
+        
+        # Bind window close to save geometry
+        self.protocol("WM_DELETE_WINDOW", self._on_close)
+        
         # Grid Layout Configuration
         self.grid_columnconfigure(0, weight=1)
         self.grid_rowconfigure(1, weight=1) # Tabview expands
@@ -76,6 +91,22 @@ class OASGenApp(ctk.CTk):
         
         self.lbl_version = ctk.CTkLabel(self.frame_header, text="v1.2.2", font=ctk.CTkFont(size=12))
         self.lbl_version.pack(padx=20, pady=15, side="right")
+        
+        # Settings button - use text for clarity
+        self.btn_settings = ctk.CTkButton(
+            self.frame_header, 
+            text="⛭",  # Gear without hub, cleaner look
+            width=35, 
+            height=35,
+            font=ctk.CTkFont(size=20),
+            command=self.open_preferences
+        )
+        self.btn_settings.pack(padx=(0, 5), pady=10, side="right")
+        
+        # Add tooltip on hover
+        self._tooltip = None
+        self.btn_settings.bind("<Enter>", self._show_settings_tooltip)
+        self.btn_settings.bind("<Leave>", self._hide_settings_tooltip)
 
         # --- Tab View ---
         self.tabview = ctk.CTkTabview(self)
@@ -101,12 +132,16 @@ class OASGenApp(ctk.CTk):
         self.entry_dir = ctk.CTkEntry(self.frame_controls, placeholder_text="Path to API Templates...")
         self.entry_dir.grid(row=0, column=1, padx=(0, 10), pady=10, sticky="ew")
         
-        # Default Path Logic
-        default_path = os.path.join(os.getcwd(), "..", "API Templates")
-        if os.path.exists(default_path):
-             self.entry_dir.insert(0, os.path.abspath(default_path))
+        # Use saved preference or default path
+        saved_template_dir = self.prefs_manager.get("template_directory", "")
+        if saved_template_dir and os.path.exists(saved_template_dir):
+            self.entry_dir.insert(0, saved_template_dir)
         else:
-             self.entry_dir.insert(0, os.getcwd())
+            default_path = os.path.join(os.getcwd(), "..", "API Templates")
+            if os.path.exists(default_path):
+                self.entry_dir.insert(0, os.path.abspath(default_path))
+            else:
+                self.entry_dir.insert(0, os.getcwd())
 
         self.btn_browse = ctk.CTkButton(self.frame_controls, text="Browse", width=100, command=self.browse_dir)
         self.btn_browse.grid(row=0, column=2, padx=10, pady=10)
@@ -118,9 +153,13 @@ class OASGenApp(ctk.CTk):
         self.entry_oas_folder = ctk.CTkEntry(self.frame_controls, placeholder_text="Path to OAS output folder...")
         self.entry_oas_folder.grid(row=1, column=1, padx=(0, 10), pady=10, sticky="ew")
         
-        # Default OAS Folder: "OAS Generated" at same level as API Templates
-        default_oas_folder = os.path.join(os.getcwd(), "OAS Generated")
-        self.entry_oas_folder.insert(0, os.path.abspath(default_oas_folder))
+        # Use saved preference or default OAS folder
+        saved_oas_folder = self.prefs_manager.get("oas_folder", "")
+        if saved_oas_folder and os.path.exists(saved_oas_folder):
+            self.entry_oas_folder.insert(0, saved_oas_folder)
+        else:
+            default_oas_folder = os.path.join(os.getcwd(), "OAS Generated")
+            self.entry_oas_folder.insert(0, os.path.abspath(default_oas_folder))
         
         self.btn_browse_oas = ctk.CTkButton(self.frame_controls, text="Browse", width=100, command=self.browse_oas_folder)
         self.btn_browse_oas.grid(row=1, column=2, padx=10, pady=10)
@@ -129,15 +168,15 @@ class OASGenApp(ctk.CTk):
         self.frame_opts = ctk.CTkFrame(self.tab_gen, fg_color="transparent")
         self.frame_opts.grid(row=1, column=0, sticky="w", padx=20, pady=(0, 10))
 
-        self.var_30 = ctk.BooleanVar(value=True)
-        self.chk_30 = ctk.CTkCheckBox(self.frame_opts, text="OAS 3.0", variable=self.var_30)
-        self.chk_30.pack(side="left", padx=(0, 20))
-        
-        self.var_31 = ctk.BooleanVar(value=True)
+        self.var_31 = ctk.BooleanVar(value=self.prefs_manager.get("gen_oas_31", True))
         self.chk_31 = ctk.CTkCheckBox(self.frame_opts, text="OAS 3.1", variable=self.var_31)
         self.chk_31.pack(side="left", padx=(0, 20))
 
-        self.var_swift = ctk.BooleanVar(value=False)
+        self.var_30 = ctk.BooleanVar(value=self.prefs_manager.get("gen_oas_30", True))
+        self.chk_30 = ctk.CTkCheckBox(self.frame_opts, text="OAS 3.0", variable=self.var_30)
+        self.chk_30.pack(side="left", padx=(0, 20))
+
+        self.var_swift = ctk.BooleanVar(value=self.prefs_manager.get("gen_oas_swift", False))
         self.chk_swift = ctk.CTkCheckBox(self.frame_opts, text="OAS SWIFT", variable=self.var_swift)
         self.chk_swift.pack(side="left")
 
@@ -146,8 +185,12 @@ class OASGenApp(ctk.CTk):
         self.btn_gen = ctk.CTkButton(self.frame_opts, text="GENERATE", font=ctk.CTkFont(weight="bold"), width=150, command=self.start_generation)
         self.btn_gen.pack(side="left", padx=40)
 
-        # Log Area
-        self.log_area = ctk.CTkTextbox(self.tab_gen)
+        # Log Area with theme from preferences
+        gen_log_theme = self.prefs_manager.get("gen_log_theme", "Light")
+        if gen_log_theme == "Dark":
+            self.log_area = ctk.CTkTextbox(self.tab_gen, fg_color="#1e1e1e", text_color="#d4d4d4")
+        else:
+            self.log_area = ctk.CTkTextbox(self.tab_gen, fg_color="#ffffff", text_color="#333333")
         self.log_area.grid(row=2, column=0, padx=10, pady=10, sticky="nsew")
         self.log_area.insert("0.0", "Ready to generate.\n")
         self.log_area.configure(state="disabled")
@@ -157,6 +200,7 @@ class OASGenApp(ctk.CTk):
         # ==========================
         self.linter = SpectralRunner() 
         self.last_lint_result = None
+        self.last_generated_files = []  # Track files from generation
         
         self.tab_val.grid_columnconfigure(0, weight=1) # List
         self.tab_val.grid_columnconfigure(1, weight=1) # Chart
@@ -171,8 +215,8 @@ class OASGenApp(ctk.CTk):
         ctk.CTkLabel(self.frame_val_folder, text="OAS Folder:", font=ctk.CTkFont(weight="bold")).grid(row=0, column=0, padx=(0, 10), sticky="w")
         self.entry_val_oas_folder = ctk.CTkEntry(self.frame_val_folder, placeholder_text="Path to OAS folder...")
         self.entry_val_oas_folder.grid(row=0, column=1, padx=(0, 10), sticky="ew")
-        # Use same default as Generation tab
-        self.entry_val_oas_folder.insert(0, os.path.abspath(os.path.join(os.getcwd(), "OAS Generated")))
+        # Sync with Generation tab (which uses preferences)
+        self.entry_val_oas_folder.insert(0, self.entry_oas_folder.get())
         self.btn_browse_val_oas = ctk.CTkButton(self.frame_val_folder, text="Browse", width=80, command=self.browse_oas_folder_validation)
         self.btn_browse_val_oas.grid(row=0, column=2)
 
@@ -190,9 +234,9 @@ class OASGenApp(ctk.CTk):
         self.cbo_files = ctk.CTkComboBox(self.frame_val_top, width=300, values=["No OAS files found"], command=self.on_file_select)
         self.cbo_files.grid(row=0, column=1, sticky="ew")  # Changed from 'w' to 'ew' for expansion
         
-        # Refresh Button
-        self.btn_lint = ctk.CTkButton(self.frame_val_top, text="↻ Refresh", width=80, command=self.run_validation)
-        self.btn_lint.grid(row=0, column=2, padx=(10, 0))
+        # Refresh Button (reload file list)
+        self.btn_refresh_val = ctk.CTkButton(self.frame_val_top, text="↻ Refresh", width=80, command=self.update_file_list)
+        self.btn_refresh_val.grid(row=0, column=2, padx=(10, 0))
 
         # Filter Checkbox
         self.chk_ignore_br = ctk.CTkCheckBox(self.frame_val_top, text="Ignore 'Bad Request' Examples", command=self.on_filter_change)
@@ -245,12 +289,20 @@ class OASGenApp(ctk.CTk):
         self.tab_logs.add("Analysis Logs")
         self.tab_logs.add("Spectral Output")
         
-        # Tab 1: App Logs
-        self.val_log = ctk.CTkTextbox(self.tab_logs.tab("Analysis Logs"), font=("Consolas", 11), state="disabled")
+        # Tab 1: Analysis Logs with theme from preferences
+        analysis_log_theme = self.prefs_manager.get("analysis_log_theme", "Light")
+        if analysis_log_theme == "Dark":
+            self.val_log = ctk.CTkTextbox(self.tab_logs.tab("Analysis Logs"), font=("Consolas", 11), state="disabled", fg_color="#1e1e1e", text_color="#d4d4d4")
+        else:
+            self.val_log = ctk.CTkTextbox(self.tab_logs.tab("Analysis Logs"), font=("Consolas", 11), state="disabled", fg_color="#ffffff", text_color="#333333")
         self.val_log.pack(fill="both", expand=True)
 
-        # Tab 2: Raw JSON
-        self.val_json_log = ctk.CTkTextbox(self.tab_logs.tab("Spectral Output"), font=("Consolas", 11), state="disabled", wrap="none")
+        # Tab 2: Spectral Output with theme from preferences
+        spectral_log_theme = self.prefs_manager.get("spectral_log_theme", "Light")
+        if spectral_log_theme == "Dark":
+            self.val_json_log = ctk.CTkTextbox(self.tab_logs.tab("Spectral Output"), font=("Consolas", 11), state="disabled", wrap="none", fg_color="#1e1e1e", text_color="#d4d4d4")
+        else:
+            self.val_json_log = ctk.CTkTextbox(self.tab_logs.tab("Spectral Output"), font=("Consolas", 11), state="disabled", wrap="none", fg_color="#ffffff", text_color="#333333")
         self.val_json_log.pack(fill="both", expand=True)
 
         # Persistent Footer (Status Bar + Log Toggle) -> For Collapsed State
@@ -277,8 +329,8 @@ class OASGenApp(ctk.CTk):
         ctk.CTkLabel(self.frame_view_folder, text="OAS Folder:", font=ctk.CTkFont(weight="bold")).grid(row=0, column=0, padx=(0, 10), sticky="w")
         self.entry_view_oas_folder = ctk.CTkEntry(self.frame_view_folder, placeholder_text="Path to OAS folder...")
         self.entry_view_oas_folder.grid(row=0, column=1, padx=(0, 10), sticky="ew")
-        # Use same default as Generation tab
-        self.entry_view_oas_folder.insert(0, os.path.abspath(os.path.join(os.getcwd(), "OAS Generated")))
+        # Sync with Generation tab (which uses preferences)
+        self.entry_view_oas_folder.insert(0, self.entry_oas_folder.get())
         self.btn_browse_view_oas = ctk.CTkButton(self.frame_view_folder, text="Browse", width=80, command=self.browse_oas_folder_view)
         self.btn_browse_view_oas.grid(row=0, column=2)
 
@@ -326,27 +378,41 @@ class OASGenApp(ctk.CTk):
             "github-dark", "nord", "one-dark", "vs-dark",  # Custom popular themes
             "monokai", "dracula", "ayu-dark", "ayu-light"  # Bundled chlorophyll themes
         ]
-        self.cbo_theme = ctk.CTkComboBox(
+        self.cbo_yaml_theme = ctk.CTkComboBox(
             self.yaml_header, 
             width=140, 
             values=self.available_themes,
             command=self.on_theme_change
         )
-        self.cbo_theme.set("oas-dark")
-        self.cbo_theme.pack(side="right")
+        self.cbo_yaml_theme.set(self.prefs_manager.get("yaml_theme", "oas-dark"))
+        self.cbo_yaml_theme.pack(side="right")
         ctk.CTkLabel(self.yaml_header, text="Theme:", font=ctk.CTkFont(size=12)).pack(side="right", padx=(0, 5))
         
-        # CodeView with YAML lexer and line numbers (start with monokai, then apply custom)
+        # Font size slider (before theme)
+        self.lbl_font_val = ctk.CTkLabel(self.yaml_header, text=str(self.prefs_manager.get("yaml_font_size", 12)), width=25)
+        self.lbl_font_val.pack(side="right", padx=(0, 10))
+        self.slider_font_size = ctk.CTkSlider(
+            self.yaml_header, from_=8, to=20, number_of_steps=12, width=100,
+            command=self._on_font_size_change
+        )
+        self.slider_font_size.set(self.prefs_manager.get("yaml_font_size", 12))
+        self.slider_font_size.pack(side="right")
+        ctk.CTkLabel(self.yaml_header, text="Font:", font=ctk.CTkFont(size=12)).pack(side="right", padx=(0, 5))
+        
+        # CodeView with YAML lexer and line numbers
+        yaml_font_size = self.prefs_manager.get("yaml_font_size", 12)
+        yaml_font_family = self.prefs_manager.get("yaml_font", "Consolas")
         self.txt_yaml = CodeView(
             self.frame_yaml, 
             lexer=pygments.lexers.YamlLexer,
             color_scheme="monokai",  # Use built-in initially
-            font=("Consolas", 11)
+            font=(yaml_font_family, yaml_font_size)
         )
         self.txt_yaml.pack(fill="both", expand=True, padx=2, pady=2)
         
-        # Apply custom theme after initialization
-        self.after(100, lambda: self.on_theme_change("oas-dark"))
+        # Apply saved theme after initialization
+        saved_theme = self.prefs_manager.get("yaml_theme", "oas-dark")
+        self.after(100, lambda: self.on_theme_change(saved_theme))
 
         # Redoc Generator initialization
         self.redoc_gen = RedocGenerator()
@@ -385,6 +451,115 @@ class OASGenApp(ctk.CTk):
                 self.txt_yaml._set_color_scheme(theme_name)
         except Exception as e:
             self.val_log_print(f"Error changing theme: {e}")
+    
+    def _show_settings_tooltip(self, event):
+        """Show tooltip for settings button."""
+        if self._tooltip is None:
+            x = self.btn_settings.winfo_rootx() + self.btn_settings.winfo_width() // 2
+            y = self.btn_settings.winfo_rooty() + self.btn_settings.winfo_height() + 5
+            self._tooltip = tk.Toplevel(self)
+            self._tooltip.wm_overrideredirect(True)
+            self._tooltip.wm_geometry(f"+{x - 40}+{y}")
+            label = tk.Label(self._tooltip, text="Preferences", bg="#333", fg="white", 
+                           font=("Segoe UI", 9), padx=8, pady=4)
+            label.pack()
+    
+    def _hide_settings_tooltip(self, event):
+        """Hide tooltip for settings button."""
+        if self._tooltip:
+            self._tooltip.destroy()
+            self._tooltip = None
+    
+    def _on_font_size_change(self, value):
+        """Handle font size slider change in View tab."""
+        font_size = int(value)
+        self.lbl_font_val.configure(text=str(font_size))
+        try:
+            self.txt_yaml.configure(font=("Consolas", font_size))
+            # Save to preferences
+            self.prefs_manager.set("yaml_font_size", font_size)
+            self.prefs_manager.save()
+        except Exception:
+            pass
+    
+    def _on_close(self):
+        """Handle window close - save geometry and exit."""
+        if self.prefs_manager.get("remember_window_pos"):
+            geometry = self.geometry()
+            self.prefs_manager.set("window_geometry", geometry)
+            self.prefs_manager.save()
+        self.destroy()
+    
+    def open_preferences(self):
+        """Open the preferences dialog."""
+        dialog = PreferencesDialog(self, self.prefs_manager, on_save_callback=self._apply_preferences)
+        self.wait_window(dialog)
+    
+    def _apply_preferences(self, new_prefs: dict):
+        """Apply new preferences to the UI."""
+        # Apply YAML theme
+        if "yaml_theme" in new_prefs:
+            self.on_theme_change(new_prefs["yaml_theme"])
+            self.cbo_yaml_theme.set(new_prefs["yaml_theme"])
+        
+        # Apply font size (if CodeView supports it)
+        if "yaml_font_size" in new_prefs:
+            try:
+                font_size = new_prefs["yaml_font_size"]
+                current_font = self.txt_yaml.cget("font")
+                if isinstance(current_font, tuple):
+                    self.txt_yaml.configure(font=(current_font[0], font_size))
+                else:
+                    self.txt_yaml.configure(font=("Consolas", font_size))
+            except:
+                pass
+        
+        # Apply generation checkboxes
+        if new_prefs.get("gen_oas_30", True):
+            self.var_30.set(True)
+        else:
+            self.var_30.set(False)
+        
+        if new_prefs.get("gen_oas_31", True):
+            self.var_31.set(True)
+        else:
+            self.var_31.set(False)
+        
+        if new_prefs.get("gen_oas_swift", False):
+            self.var_swift.set(True)
+        else:
+            self.var_swift.set(False)
+        
+        # Apply validation checkbox
+        if new_prefs.get("ignore_bad_request", True):
+            self.chk_ignore_br.select()
+        else:
+            self.chk_ignore_br.deselect()
+        
+        # Apply log themes immediately
+        if "gen_log_theme" in new_prefs:
+            theme = new_prefs["gen_log_theme"]
+            if theme == "Dark":
+                self.log_area.configure(fg_color="#1e1e1e", text_color="#d4d4d4")
+            else:
+                self.log_area.configure(fg_color="#ffffff", text_color="#333333")
+        
+        if "analysis_log_theme" in new_prefs:
+            theme = new_prefs["analysis_log_theme"]
+            if theme == "Dark":
+                self.val_log.configure(fg_color="#1e1e1e", text_color="#d4d4d4")
+            else:
+                self.val_log.configure(fg_color="#ffffff", text_color="#333333")
+        
+        if "spectral_log_theme" in new_prefs:
+            theme = new_prefs["spectral_log_theme"]
+            if theme == "Dark":
+                self.val_json_log.configure(fg_color="#1e1e1e", text_color="#d4d4d4")
+            else:
+                self.val_json_log.configure(fg_color="#ffffff", text_color="#333333")
+        
+        # Refresh file list with new sort order
+        self.update_file_list()
         
     def toggle_log(self):
         if self.log_visible:
@@ -405,7 +580,9 @@ class OASGenApp(ctk.CTk):
         self.val_log.configure(state="disabled")
 
     def browse_dir(self):
-        directory = filedialog.askdirectory()
+        current_path = self.entry_dir.get()
+        initial_dir = current_path if os.path.exists(current_path) else os.getcwd()
+        directory = filedialog.askdirectory(initialdir=initial_dir)
         if directory:
             self.entry_dir.delete(0, 'end')
             self.entry_dir.insert(0, directory)
@@ -512,9 +689,18 @@ class OASGenApp(ctk.CTk):
             if os.path.exists(f):
                 candidates.add(f)
         
+        # Sort based on preference
+        sort_order = self.prefs_manager.get("file_sort_order", "alphabetical")
+        if sort_order == "newest_first":
+            sorted_candidates = sorted(candidates, key=lambda f: os.path.getmtime(f), reverse=True)
+        elif sort_order == "oldest_first":
+            sorted_candidates = sorted(candidates, key=lambda f: os.path.getmtime(f))
+        else:  # alphabetical
+            sorted_candidates = sorted(candidates)
+        
         self.file_map = {}
         display_names = []
-        for path in sorted(candidates):  # Sort for consistent ordering
+        for path in sorted_candidates:
             name = os.path.basename(path)
             self.file_map[name] = path
             display_names.append(name)
@@ -522,7 +708,7 @@ class OASGenApp(ctk.CTk):
         if display_names:
             self.cbo_files.configure(values=display_names)
             self.cbo_files.set(display_names[0])
-            self.btn_lint.configure(state="normal")
+            # Always run validation on file selection
             self.run_validation()
         else:
             self.cbo_files.configure(values=["No OAS files found"])
@@ -679,9 +865,18 @@ class OASGenApp(ctk.CTk):
                 if f.endswith(".yaml") or f.endswith(".json"):
                     candidates.append(os.path.join(oas_dir, f))
         
+        # Sort based on preference (same as Validation tab)
+        sort_order = self.prefs_manager.get("file_sort_order", "alphabetical")
+        if sort_order == "newest_first":
+            sorted_candidates = sorted(candidates, key=lambda f: os.path.getmtime(f), reverse=True)
+        elif sort_order == "oldest_first":
+            sorted_candidates = sorted(candidates, key=lambda f: os.path.getmtime(f))
+        else:  # alphabetical
+            sorted_candidates = sorted(candidates)
+        
         self.view_file_map = {}
         display_names = []
-        for path in candidates:
+        for path in sorted_candidates:
             name = os.path.basename(path)
             self.view_file_map[name] = path
             display_names.append(name)
