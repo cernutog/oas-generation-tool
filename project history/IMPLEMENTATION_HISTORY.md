@@ -274,3 +274,60 @@ User feedback identified several issues in the v1.2.x series:
 
 ### Conclusion
 v1.2.2 consolidates these fixes into a stable release, verified by both automated scripts and manual inspection of generated artifacts.
+
+## Release v1.3: Docked Documentation Viewer (2025-12-25)
+
+### Major Features
+
+#### 1. Integrated Documentation Viewer
+**Requirement**: View Redoc-style API documentation directly from the application without external browser.
+- **Implementation**:
+  - New `doc_viewer.py` module using `pywebview` for embedded browser rendering
+  - Multiprocessing architecture for stable window management
+  - Shared memory IPC (`multiprocessing.Value`) for dock state synchronization
+
+#### 2. Docked Side-by-Side Mode
+**Requirement**: Documentation viewer should dock alongside the main window for seamless editing.
+- **Implementation**:
+  - Windows API integration (`SystemParametersInfoW` with `SPI_GETWORKAREA`) for accurate screen dimensions
+  - Invisible border compensation (7px) for Windows 11 compatibility
+  - 30px bottom margin for visible rounded corners above taskbar
+  - Non-blocking positioning using `self.after()` to prevent UI freezes
+
+#### 3. Bidirectional Sync
+**Features**:
+  - **Locate in Docs**: Right-click YAML operations → navigate to corresponding section in documentation
+  - **Sync from Docs**: Click documentation sections → jump to corresponding YAML code in editor
+
+#### 4. Preferences System
+- New `preferences.py` and `preferences_dialog.py` modules
+- Customizable settings: font size, color schemes, dock behavior
+- Multiple editor themes: OAS Dark, One Dark, Nord, GitHub Dark, VS Dark
+
+### Bugfixes
+
+#### 1. Viewer Reopen Fix
+**Problem**: Closed documentation viewers could not be reopened - clicking "View Documentation" did nothing.
+**Root Cause**: `process.is_alive()` returned True even after window was closed.
+**Solution**: Modified `focus()` to detect closed windows via `pygetwindow.getWindowsWithTitle()`. If window not found, marks viewer as closed and allows creating a new one.
+
+#### 2. Terminology Consistency
+- Renamed "Bind/Unbind" to "Dock/Undock" throughout the UI for clarity
+
+### Repository Cleanup
+- Removed generated HTML files from git tracking
+- Added `*.html` to `.gitignore`
+- Deleted merged feature branch `feat-view-redocly`
+
+### Files Added
+- `src/doc_viewer.py` - Docked viewer implementation
+- `src/preferences.py` - Preferences manager
+- `src/preferences_dialog.py` - Preferences UI dialog
+- `src/redoc_gen.py` - Redoc HTML generation
+- `src/resources/redoc.standalone.js` - Bundled Redoc library
+- `src/colorschemes/*.toml` - Editor color scheme definitions
+
+### Next Steps (v1.4)
+- Make generated HTML files temporary and clean up on viewer/app close
+- Remove `_redoc` suffix from generated filenames
+
