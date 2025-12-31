@@ -872,80 +872,60 @@ class OASGenerator:
         else:
             return {}
 
-    def _map_type_to_schema(self, row, is_node=False):
+    def _handle_combinator_refs(self, type_val, schema_ref, desc=None):
         """
-        Maps Excel row data to an OAS schema object.
+        Handles oneOf/allOf/anyOf combinators with schema references.
+        Returns complete schema dict or None if not a combinator.
         """
-        type_val = self._get_type(row)
-        if pd.isna(type_val): type_val = "string"
-        type_val = str(type_val).strip().lower()
+        if type_val not in ['oneof', 'allof', 'anyof']:
+            return None
         
-
-        schema = {}
+        refs = [r.strip() for r in str(schema_ref).split(',')]
+        combinator_key = {
+            'oneof': 'oneOf', 
+            'allof': 'allOf', 
+            'anyof': 'anyOf'
+        }.get(type_val)
         
-        # Check if it's a ref
-        schema_ref = self._get_schema_name(row)
-        desc = self._get_description(row)
+        schema = {
+            combinator_key: [{"$ref": f"#/components/schemas/{r}"} for r in refs if r]
+        }
         
-        if pd.notna(schema_ref):
-            # HANDLE COMBINATORS (Top Level)
-            if type_val in ['oneof', 'allof', 'anyof']:
-                refs = [r.strip() for r in str(schema_ref).split(',')]
-                # Convert 'oneof' -> 'oneOf' camelCase
-                combinator_key = {
-                    'oneof': 'oneOf', 
-                    'allof': 'allOf', 
-                    'anyof': 'anyOf'
-                }.get(type_val)
-                
-                schema[combinator_key] = [{"$ref": f"#/components/schemas/{r}"} for r in refs if r]
-                
-                if pd.notna(desc): schema["description"] = str(desc)
-                return schema
-
-            ref_path = f"#/components/schemas/{schema_ref}"
-            
-            if type_val == "array":
-                schema["type"] = "array"
-                schema["items"] = {"$ref": ref_path}
-            else:
-                # OAS 3.0 Workaround check
-                has_desc = pd.notna(desc)
-                is_oas30 = self.version.startswith("3.0")
-                
-                if is_oas30 and has_desc:
-                    schema = {
-                        "allOf": [ {"$ref": ref_path} ],
-                        "description": str(desc)
-                    }
-                    return schema 
-                else:
-                    schema["$ref"] = ref_path
-        
-        
-        # Don't treat Excel-specific types as valid OAS types
-        # These should be handled as references (parameter, schema, header) or are not valid types
-        invalid_types = ['parameter', 'parameters', 'schema', 'header', 'response']
-        if type_val in invalid_types:
-            # If we reach here with these types, it means Schema Name was empty
-            # Default to string type as fallback
-            type_val = 'string'
-        
-        if type_val != "array" and "$ref" not in schema and "allOf" not in schema:
-            schema["type"] = type_val
-        
-        # Add Description 
-        if pd.notna(desc) and "description" not in schema: 
+        if pd.notna(desc):
             schema["description"] = str(desc)
-
-        # ex = self._get_col_value(row, ["Example", "Examples"])
-        # if pd.notna(ex): 
-        #     parsed_ex = self._parse_example_string(ex)
-        #     if self.version.startswith("3.1"):
-        #         schema["examples"] = [parsed_ex]
-        #     else:
-        #         schema["example"] = parsed_ex
         
+        return schema
+
+    def _handle_schema_reference(self, type_val, schema_ref, desc):
+        """
+        Handles $ref with OAS 3.0 workaround for description.
+        Returns schema dict with appropriate ref structure.
+        """
+        ref_path = f"#/components/schemas/{schema_ref}"
+        
+        if type_val == "array":
+            return {
+                "type": "array",
+                "items": {"$ref": ref_path}
+            }
+        
+        # OAS 3.0 Workaround: $ref + description requires allOf wrapper
+        has_desc = pd.notna(desc)
+        is_oas30 = self.version.startswith("3.0")
+        
+        if is_oas30 and has_desc:
+            return {
+                "allOf": [{"$ref": ref_path}],
+                "description": str(desc)
+            }
+        else:
+            return {"$ref": ref_path}
+
+    def _apply_schema_constraints(self, schema, row, type_val):
+        """
+        Applies enums, format, pattern, and min/max constraints to schema.
+        Modifies schema dict in-place.
+        """
         # Enums
         enum_val = self._get_col_value(row, ["Allowed value", "Allowed values"])
         if pd.notna(enum_val):
@@ -956,10 +936,9 @@ class OASGenerator:
                 try:
                     enum_list = [int(x) for x in enum_list if x]
                 except ValueError:
-                    pass # Keep as strings if conversion fails
+                    pass
             elif type_val == "number":
                 try:
-                    # Check if integer float (e.g. 400.0) -> int, else float
                     new_list = []
                     for x in enum_list:
                         if not x: continue
@@ -974,82 +953,118 @@ class OASGenerator:
             
             schema["enum"] = enum_list
 
-        # Formatting / Constraints
+        # Format and Pattern
         fmt = self._get_col_value(row, ["Format"])
-        if pd.notna(fmt): schema["format"] = str(fmt)
+        if pd.notna(fmt):
+            schema["format"] = str(fmt)
         
         pattern = self._get_col_value(row, ["PatternEba", "Pattern", "Regex"])
-        if pd.notna(pattern): schema["pattern"] = str(pattern)
+        if pd.notna(pattern):
+            schema["pattern"] = str(pattern)
 
+        # Min/Max constraints
         min_val = self._get_col_value(row, ["Min\nValue/Length/Item", "Min  \nValue/Length/Item", "Min Value/Length/Item", "Min"])
         max_val = self._get_col_value(row, ["Max\nValue/Length/Item", "Max  \nValue/Length/Item", "Max Value/Length/Item", "Max"])
         
         if pd.notna(min_val):
-            # Infer if it's minLength, minimum, or minItems property based on type
             try:
                 val = int(min_val) if float(min_val).is_integer() else float(min_val)
-                if type_val == "string": schema["minLength"] = int(val)
-                elif type_val in ["integer", "number"]: schema["minimum"] = val
-                elif type_val == "array": schema["minItems"] = int(val)
+                if type_val == "string":
+                    schema["minLength"] = int(val)
+                elif type_val in ["integer", "number"]:
+                    schema["minimum"] = val
+                elif type_val == "array":
+                    schema["minItems"] = int(val)
             except (ValueError, TypeError):
                 pass
 
         if pd.notna(max_val):
             try:
                 val = int(max_val) if float(max_val).is_integer() else float(max_val)
-                if type_val == "string": schema["maxLength"] = int(val)
-                elif type_val in ["integer", "number"]: schema["maximum"] = val
-                elif type_val == "array": schema["maxItems"] = int(val)
+                if type_val == "string":
+                    schema["maxLength"] = int(val)
+                elif type_val in ["integer", "number"]:
+                    schema["maximum"] = val
+                elif type_val == "array":
+                    schema["maxItems"] = int(val)
             except (ValueError, TypeError):
                 pass
 
+
+    def _map_type_to_schema(self, row, is_node=False):
+        """
+        Maps Excel row data to an OAS schema object.
+        Delegates to helper methods for combinators, references, and constraints.
+        """
+        type_val = self._get_type(row)
+        if pd.isna(type_val):
+            type_val = "string"
+        type_val = str(type_val).strip().lower()
+
+        schema = {}
+        schema_ref = self._get_schema_name(row)
+        desc = self._get_description(row)
+        
+        # Handle combinators (oneOf/allOf/anyOf)
+        if pd.notna(schema_ref):
+            combinator_schema = self._handle_combinator_refs(type_val, schema_ref, desc)
+            if combinator_schema:
+                return combinator_schema
+            
+            # Handle standard $ref
+            ref_schema = self._handle_schema_reference(type_val, schema_ref, desc)
+            schema.update(ref_schema)
+        
+        # Filter out Excel-specific type keywords
+        invalid_types = ['parameter', 'parameters', 'schema', 'header', 'response']
+        if type_val in invalid_types:
+            type_val = 'string'  # Fallback to string
+        
+        # Set base type if not already set by ref handling
+        if type_val != "array" and "$ref" not in schema and "allOf" not in schema:
+            schema["type"] = type_val
+        
+        # Add description if not already present
+        if pd.notna(desc) and "description" not in schema:
+            schema["description"] = str(desc)
+
+        # Apply constraints (enum, format, pattern, min/max)
+        self._apply_schema_constraints(schema, row, type_val)
+
+        # Handle array-specific logic
         if type_val == "array":
             schema["type"] = "array"
-            # If explicit item type is given
             item_type_raw = self._get_col_value(row, [
                 "Items Data Type\n(Array only)", 
-                "Items Data Type \n(Array only)", # Handle space before newline
+                "Items Data Type \n(Array only)",
                 "Items Data Type", 
                 "Item Type"
             ])
             
             if pd.notna(item_type_raw):
-                 item_type = str(item_type_raw).strip().lower()
-                 
-                 # HANDLE COMBINATORS (Array Items)
-                 if item_type in ['oneof', 'allof', 'anyof'] and pd.notna(schema_ref):
-                     refs = [r.strip() for r in str(schema_ref).split(',')]
-                     combinator_key = {
-                        'oneof': 'oneOf', 
-                        'allof': 'allOf', 
-                        'anyof': 'anyOf'
-                     }.get(item_type)
-                     
-                     schema["items"] = {
-                         combinator_key: [{"$ref": f"#/components/schemas/{r}"} for r in refs if r]
-                     }
-                 else:
-                     # Only set type if it's a valid OAS primitive type
-                     allowed_types = ["string", "number", "integer", "boolean", "array", "object"]
-                     if item_type in allowed_types:
+                item_type = str(item_type_raw).strip().lower()
+                
+                # Handle combinators in array items
+                if item_type in ['oneof', 'allof', 'anyof'] and pd.notna(schema_ref):
+                    combinator_schema = self._handle_combinator_refs(item_type, schema_ref)
+                    if combinator_schema:
+                        schema["items"] = combinator_schema
+                else:
+                    # Set primitive type or reference
+                    allowed_types = ["string", "number", "integer", "boolean", "array", "object"]
+                    if item_type in allowed_types:
                         schema["items"] = {"type": item_type}
-                     elif item_type not in invalid_types and item_type not in allowed_types:
-                        # Assumed to be a reference if it's not a primitive and not an explicit invalid keywords
-                        # e.g. 'hateoasblock' -> $ref: #/components/schemas/HateoasBlock
-                        # Try to capitalize? Or use as provides?
-                        # Usually Schema Name column is used for Refs. If Schema Name is empty, maybe Item Type is the Ref?
-                        
-                        # Use exact casing from Item Type if Schema Name is missing
+                    elif item_type not in invalid_types:
+                        # Assume it's a reference
                         if pd.isna(schema_ref):
-                             # Only if we don't have a ref from Schema Name already
-                             ref_name = str(item_type_raw).strip() # Use raw casing
-                             schema["items"] = {"$ref": f"#/components/schemas/{ref_name}"}
+                            ref_name = str(item_type_raw).strip()
+                            schema["items"] = {"$ref": f"#/components/schemas/{ref_name}"}
             elif "items" not in schema:
-                 schema["items"] = {} 
+                schema["items"] = {}
 
-        # FIX: Move Example processing to the END to ensure it appears last in the YAML
+        # Add examples (at the end for YAML formatting)
         ex = self._get_col_value(row, ["Example", "Examples"])
-        if pd.notna(ex): 
+        if pd.notna(ex):
             parsed_ex = self._parse_example_string(ex)
             if self.version.startswith("3.1"):
                 schema["examples"] = [parsed_ex]
@@ -1057,6 +1072,7 @@ class OASGenerator:
                 schema["example"] = parsed_ex
 
         return schema
+
 
     def build_components(self, global_components):
         """
