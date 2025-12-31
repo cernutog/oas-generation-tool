@@ -309,19 +309,19 @@ class OASGenerator:
         if ex_str.startswith("{") or ex_str.startswith("["):
             try:
                 return json.loads(ex_str)
-            except:
+            except (json.JSONDecodeError, TypeError, ValueError):
                 # Try fixing single quotes
                 try:
                     fixed = ex_str.replace("'", '"')
                     fixed = fixed.replace("None", "null").replace("False", "false").replace("True", "true")
                     return json.loads(fixed)
-                except:
+                except (json.JSONDecodeError, TypeError, ValueError):
                     pass # Fallback to YAML
 
         # 2. Try YAML (Safe Load)
         try:
             return yaml.safe_load(ex_str)
-        except:
+        except (yaml.YAMLError, ValueError, TypeError):
             # 3. If YAML failed, it might be because of outer braces wrapping block-style YAML?
             # e.g. "{ \n key: val \n }" -> Invalid flow style but valid block if stripped.
             if ex_str.startswith("{") and ex_str.endswith("}"):
@@ -991,7 +991,8 @@ class OASGenerator:
                 if type_val == "string": schema["minLength"] = int(val)
                 elif type_val in ["integer", "number"]: schema["minimum"] = val
                 elif type_val == "array": schema["minItems"] = int(val)
-            except: pass
+            except (ValueError, TypeError):
+                pass
 
         if pd.notna(max_val):
             try:
@@ -999,7 +1000,8 @@ class OASGenerator:
                 if type_val == "string": schema["maxLength"] = int(val)
                 elif type_val in ["integer", "number"]: schema["maximum"] = val
                 elif type_val == "array": schema["maxItems"] = int(val)
-            except: pass
+            except (ValueError, TypeError):
+                pass
 
         if type_val == "array":
             schema["type"] = "array"

@@ -64,7 +64,7 @@ class PreferencesDialog(ctk.CTkToplevel):
                 # At 250ms, CTkToplevel has already set its default icon,
                 # so we can safely override it now
                 self.iconbitmap(icon_file)
-        except:
+        except (OSError, FileNotFoundError, Exception):
             pass
     
     def _build_ui(self):

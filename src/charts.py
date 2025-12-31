@@ -97,7 +97,7 @@ class SemanticPieChart(ctk.CTkFrame):
             b = max(0, min(255, int(b * factor)))
             
             return f'#{r:02x}{g:02x}{b:02x}'
-        except:
+        except (ValueError, IndexError, TypeError):
             return hex_color
 
     def draw(self, event=None):

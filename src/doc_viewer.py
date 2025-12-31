@@ -25,7 +25,8 @@ def debug_log(msg):
             import datetime
             ts = datetime.datetime.now().strftime("%H:%M:%S.%f")
             f.write(f"[{ts}] [DOC_VIEWER] {msg}\n")
-    except: pass
+    except (OSError, IOError, PermissionError):
+        pass
 
 class DocViewerAPI:
     """JavaScript API exposed to the webview for IPC."""

@@ -80,7 +80,7 @@ class OASGenApp(ctk.CTk):
         if self.prefs_manager.get("remember_window_pos") and self.prefs_manager.get("window_geometry"):
             try:
                 self.geometry(self.prefs_manager.get("window_geometry"))
-            except:
+            except (tk.TclError, ValueError):
                 pass
         
         # Bind window close to save geometry
@@ -549,7 +549,7 @@ class OASGenApp(ctk.CTk):
             # Save to preferences
             self.prefs_manager.set("yaml_font_size", font_size)
             self.prefs_manager.save()
-        except Exception:
+        except (tk.TclError, AttributeError):
             pass
     
     def _on_close(self):
@@ -581,7 +581,7 @@ class OASGenApp(ctk.CTk):
                     self.txt_yaml.configure(font=(current_font[0], font_size))
                 else:
                     self.txt_yaml.configure(font=("Consolas", font_size))
-            except:
+            except (tk.TclError, AttributeError, TypeError):
                 pass
         
         # Apply generation checkboxes

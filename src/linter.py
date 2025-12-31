@@ -115,5 +115,5 @@ class SpectralRunner:
             if os.path.exists(temp_out):
                 try:
                     os.remove(temp_out)
-                except:
+                except (OSError, PermissionError):
                     pass
