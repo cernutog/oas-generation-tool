@@ -1,5 +1,22 @@
 # Implementation History - Custom Extension Formatting
 
+## Development Environment
+
+**IMPORTANT**: This project requires Python 3.13 for compatibility with all dependencies.
+
+**Setup**:
+- Use the virtual environment: `.venv` (Python 3.13)
+- Activate: `.\.venv\Scripts\python.exe` (direct path recommended)
+- Build command: `.\.venv\Scripts\python.exe -m PyInstaller OAS_Gen_Tool.spec`
+
+**Why Python 3.13**:
+- `chlorophyll` library requires Python ≤ 3.13
+- PyInstaller tkinter DLL resolution works correctly with 3.13
+- DO NOT use Python 3.14+ - will cause build failures
+
+---
+
+
 ## Problem Statement
 Custom OpenAPI extensions (`x-sandbox-*`) in the Excel source use YAML literal block style (`|`) for multiline content. When generating the OAS YAML, these extensions were being:
 1. Formatted as quoted strings instead of literal blocks
