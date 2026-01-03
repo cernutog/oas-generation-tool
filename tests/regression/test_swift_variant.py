@@ -7,6 +7,7 @@ SWIFT variants have specific requirements:
 - Add: securitySchemes and global security
 - Add: ivUserKey and ivUserBic parameters
 - Remove: x-sandbox-* extensions (sandbox is for testing only)
+- Remove: Bad Request (400) examples (SWIFT should not have these)
 - 400 responses use oneOf schema
 """
 
@@ -101,6 +102,34 @@ class TestSwiftVariant:
         
         sandbox_count = content.count('x-sandbox')
         assert sandbox_count == 0, f"SWIFT should NOT have x-sandbox extensions, found {sandbox_count}"
+    
+    def test_swift_no_bad_request_examples(self, generate_oas):
+        """
+        Verify SWIFT has NO examples in 400 (Bad Request) responses.
+        Bad Request examples should be stripped from SWIFT output.
+        """
+        output_dir = generate_oas(gen_30=False, gen_31=True, gen_swift=True)
+        
+        swift_files = list(output_dir.glob("*3.1*SWIFT*.yaml"))
+        assert swift_files, "No OAS 3.1 SWIFT file generated"
+        
+        with open(swift_files[0], 'r', encoding='utf-8') as f:
+            oas = yaml.safe_load(f)
+        
+        bad_request_examples = []
+        
+        for path, path_obj in oas.get('paths', {}).items():
+            for method, op in path_obj.items():
+                if method in ['get', 'post', 'put', 'patch', 'delete']:
+                    responses = op.get('responses', {})
+                    resp_400 = responses.get('400', {})
+                    content = resp_400.get('content', {})
+                    for media_type, media_obj in content.items():
+                        if 'example' in media_obj or 'examples' in media_obj:
+                            bad_request_examples.append(f"{path}.{method}.400")
+        
+        assert len(bad_request_examples) == 0, \
+            f"SWIFT should NOT have Bad Request examples, found {len(bad_request_examples)}: {bad_request_examples}"
     
     def test_swift_400_uses_oneof_schema(self, generate_oas):
         """
