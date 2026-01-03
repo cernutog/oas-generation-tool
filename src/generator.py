@@ -25,6 +25,12 @@ from src.generator_pkg.schema_builder import (
     apply_schema_constraints as _apply_schema_constraints_fn,
     map_type_to_schema as _map_type_to_schema_fn,
 )
+from src.generator_pkg.response_builder import (
+    build_response_tree as _build_response_tree_fn,
+    extract_response_description as _extract_response_description_fn,
+    flatten_subtree as _flatten_subtree_fn,
+    build_schema_from_flat_table as _build_schema_from_flat_table_fn,
+)
 
 
 class OASGenerator:
@@ -314,68 +320,12 @@ class OASGenerator:
         return _parse_example_string_fn(ex_str)
 
     def _build_response_tree(self, df):
-        """
-        Builds a tree structure from flat DataFrame rows using synthetic root.
-        Returns root_node dict with 'children' list.
-        """
-        df.columns = df.columns.str.strip()
-        nodes = {}
-        last_seen = {}
-        roots = [{"name": "Response", "children": [], "idx": -1, "row": None}]
-
-        for idx, row in df.iterrows():
-            name = str(self._get_name(row)).strip()
-            parent = self._get_parent(row)
-            parent_str = str(parent).strip() if pd.notna(parent) else ""
-            section = str(self._get_col_value(row, ["Section"])).strip().lower()
-
-            node = {"row": row, "children": [], "idx": idx, "name": name}
-            nodes[idx] = node
-
-            # Linking Logic
-            if section in ["header", "headers", "content"]:
-                roots[0]["children"].append(node)
-            else:
-                target_idx = -1
-                if parent_str in last_seen:
-                    target_idx = last_seen[parent_str]
-                else:
-                    m = re.match(r"(.+)\[(\d+)\]$", parent_str)
-                    if m:
-                        base = m.group(1)
-                        if base in last_seen:
-                            target_idx = last_seen[base]
-
-                if target_idx != -1:
-                    nodes[target_idx]["children"].append(node)
-                else:
-                    roots[0]["children"].append(node)
-
-            if name and name.lower() != "nan":
-                last_seen[name] = idx
-
-        return roots[0] if roots else None
+        """Delegate to response_builder.build_response_tree."""
+        return _build_response_tree_fn(df, self._get_name, self._get_parent, self._get_col_value)
 
     def _extract_response_description(self, df, root_node):
-        """
-        Extracts response description with priority:
-        1. df.attrs['response_description']
-        2. Description column
-        3. Parent column (fallback)
-        """
-        desc = None
-        if hasattr(df, "attrs") and "response_description" in df.attrs:
-            desc = df.attrs["response_description"]
-
-        if pd.isna(desc) or not str(desc).strip():
-            if root_node["row"] is not None:
-                desc = self._get_description(root_node["row"])
-
-        if pd.isna(desc) or not str(desc).strip():
-            if root_node["row"] is not None:
-                desc = self._get_parent(root_node["row"])
-
-        return str(desc).strip() if pd.notna(desc) else "Response"
+        """Delegate to response_builder.extract_response_description."""
+        return _extract_response_description_fn(df, root_node, self._get_description, self._get_parent)
 
     def _process_response_headers(self, header_nodes):
         """
@@ -562,12 +512,8 @@ class OASGenerator:
         return resp_obj
 
     def _flatten_subtree(self, nodes):
-        """Helper to collect all descendant rows from a list of nodes"""
-        rows = []
-        for n in nodes:
-            rows.append(n)
-            rows.extend(self._flatten_subtree(n["children"]))
-        return rows
+        """Delegate to response_builder.flatten_subtree."""
+        return _flatten_subtree_fn(nodes)
 
     def _build_examples_from_rows(self, df):
         """
@@ -730,125 +676,8 @@ class OASGenerator:
         return final_examples
 
     def _build_schema_from_flat_table(self, df):
-        """
-        Reconstructs a nested schema from flat parent/child rows.
-        """
-        # 1. Index rows by Name for parent lookup
-        df.columns = df.columns.str.strip()
-
-        nodes = {}
-        roots = []
-
-        for idx, row in df.iterrows():
-            name = self._get_name(row)
-            if pd.isna(name):
-                continue
-            name = str(name).strip()
-
-            # Skip rows that look like content-types or section headers if they don't have schema info
-            # FIX: Do NOT skip "application/json" if it acts as a parent!
-            # if name == "application/json" and pd.isna(self._get_parent(row)):
-            #    continue
-
-            node = {
-                "name": name,
-                "type": self._get_type(row),
-                "description": self._get_description(row),
-                "parent": self._get_parent(row),
-                "mandatory": str(
-                    self._get_col_value(row, ["Mandatory", "Required"]) or ""
-                ).lower()
-                in ["yes", "y", "true", "m"],
-                "schema_obj": self._map_type_to_schema(row, is_node=True),
-            }
-
-            nodes[name] = node
-
-        # 2. Build Tree
-        for name, node in nodes.items():
-            parent_name = node["parent"]
-
-            if pd.isna(parent_name) or str(parent_name).strip() == "":
-                roots.append(node)
-            else:
-                parent_name = str(parent_name).strip()
-                if parent_name in nodes:
-                    parent = nodes[parent_name]
-                    parent_schema = parent["schema_obj"]
-
-                    if parent_schema.get("type") == "array":
-                        # Handle Array of Objects
-                        items = parent_schema.get("items", {})
-                        is_object_array = isinstance(items, dict) and (
-                            items.get("type") == "object" or "properties" in items
-                        )
-
-                        if is_object_array:
-                            if "properties" not in items:
-                                items["properties"] = {}
-                            items["properties"][name] = node["schema_obj"]
-
-                            # Handle Required for Items
-                            if node["mandatory"]:
-                                if "required" not in items:
-                                    items["required"] = []
-                                if name not in items["required"]:
-                                    items["required"].append(name)
-
-                            parent_schema["items"] = items
-                        else:
-                            # Original behavior: Overwrite items (e.g. for Array of Strings or Array of Refs)
-                            parent_schema["items"] = node["schema_obj"]
-                    else:
-                        if "properties" not in parent_schema:
-                            parent_schema["properties"] = {}
-                        parent_schema["properties"][name] = node["schema_obj"]
-
-                        # Handle Required
-                        if node["mandatory"]:
-                            if "required" not in parent_schema:
-                                parent_schema["required"] = []
-                            if name not in parent_schema["required"]:
-                                parent_schema["required"].append(name)
-                else:
-                    # Parent not in nodes (e.g. application/json). Treat as Root.
-                    roots.append(node)
-
-        # FIX: Re-order 'example' and 'examples' to be the LAST keys in the schema object
-        # Using destructive update with OrderedDict to ensure PyYAML respects the order
-        from collections import OrderedDict
-
-        for name, node in nodes.items():
-            schema = node["schema_obj"]
-
-            ex = schema.pop("example", None)
-            exs = schema.pop("examples", None)
-
-            # Create a new ordered dict with remaining items
-            new_schema = OrderedDict()
-            for k, v in schema.items():
-                new_schema[k] = v
-
-            # Add back examples at the end
-            if ex is not None:
-                new_schema["example"] = ex
-            if exs is not None:
-                new_schema["examples"] = exs
-
-            # Destructive update of the original reference
-            schema.clear()
-            schema.update(new_schema)
-
-        # 3. Return the Root Schema
-        if len(roots) == 1:
-            return roots[0]["schema_obj"]
-        elif len(roots) > 1:
-            return {
-                "type": "object",
-                "properties": {r["name"]: r["schema_obj"] for r in roots},
-            }
-        else:
-            return {}
+        """Delegate to response_builder.build_schema_from_flat_table."""
+        return _build_schema_from_flat_table_fn(df, self.version)
 
     def _handle_combinator_refs(self, type_val, schema_ref, desc=None):
         """Delegate to schema_builder.handle_combinator_refs."""
