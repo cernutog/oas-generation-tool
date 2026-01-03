@@ -107,7 +107,7 @@ def deep_diff(
             exp_str = exp_str[:100] + "..."
         if len(act_str) > 100:
             act_str = act_str[:100] + "..."
-        differences.append(f"CHANGED: {path}: {exp_str} → {act_str}")
+        differences.append(f"CHANGED: {path}: {exp_str} -> {act_str}")
     
     return differences
 

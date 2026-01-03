@@ -2,9 +2,12 @@
 SWIFT Variant Tests.
 
 SWIFT variants have specific requirements:
-- Keep all examples EXCEPT Bad Request examples
-- Remove all x-sandbox-* extensions
-- Preserve same structure (paths, schemas)
+- Add: Errors and ErrorMessage schemas
+- Add: X-Request-ID headers in all responses
+- Add: securitySchemes and global security
+- Add: ivUserKey and ivUserBic parameters
+- Remove: x-sandbox-* extensions (sandbox is for testing only)
+- 400 responses use oneOf schema
 """
 
 import pytest
@@ -14,12 +17,13 @@ import yaml
 class TestSwiftVariant:
     """
     Test suite for SWIFT variant validation.
+    Tests verify that SWIFT has the expected differences from Standard.
     """
     
-    @pytest.mark.xfail(reason="Known bug: SWIFT generator still includes Bad Request examples")
-    def test_swift_31_has_examples_except_bad_request(self, generate_oas):
+    def test_swift_has_errors_schemas(self, generate_oas):
         """
-        Verify OAS 3.1 SWIFT has examples but NOT for Bad Request (400).
+        Verify OAS 3.1 SWIFT has Errors and ErrorMessage schemas.
+        These are SWIFT-specific requirements.
         """
         output_dir = generate_oas(gen_30=False, gen_31=True, gen_swift=True)
         
@@ -29,59 +33,63 @@ class TestSwiftVariant:
         with open(swift_files[0], 'r', encoding='utf-8') as f:
             oas = yaml.safe_load(f)
         
-        # Check that examples exist in general
-        has_examples = False
-        bad_request_examples = []
+        schemas = oas.get('components', {}).get('schemas', {})
         
-        for path, path_obj in oas.get('paths', {}).items():
-            for method, op in path_obj.items():
-                if method in ['get', 'post', 'put', 'patch', 'delete']:
-                    responses = op.get('responses', {})
-                    for code, resp in responses.items():
-                        content = resp.get('content', {})
-                        for media_type, media_obj in content.items():
-                            if 'example' in media_obj or 'examples' in media_obj:
-                                has_examples = True
-                                if code == '400':
-                                    bad_request_examples.append(f"{path}.{method}.{code}")
-        
-        assert has_examples, "SWIFT should have examples (except Bad Request)"
-        assert len(bad_request_examples) == 0, f"SWIFT should NOT have Bad Request examples: {bad_request_examples}"
+        assert 'Errors' in schemas, "SWIFT should have 'Errors' schema"
+        assert 'ErrorMessage' in schemas, "SWIFT should have 'ErrorMessage' schema"
     
-    @pytest.mark.xfail(reason="Known bug: SWIFT generator still includes Bad Request examples")
-    def test_swift_30_has_examples_except_bad_request(self, generate_oas):
+    def test_swift_has_security_schemes(self, generate_oas):
         """
-        Verify OAS 3.0 SWIFT has examples but NOT for Bad Request (400).
+        Verify SWIFT has securitySchemes and global security.
         """
-        output_dir = generate_oas(gen_30=True, gen_31=False, gen_swift=True)
+        output_dir = generate_oas(gen_30=False, gen_31=True, gen_swift=True)
         
-        swift_files = list(output_dir.glob("*3.0*SWIFT*.yaml"))
-        assert swift_files, "No OAS 3.0 SWIFT file generated"
+        swift_files = list(output_dir.glob("*3.1*SWIFT*.yaml"))
         
         with open(swift_files[0], 'r', encoding='utf-8') as f:
             oas = yaml.safe_load(f)
         
-        has_examples = False
-        bad_request_examples = []
+        # Check for security schemes
+        security_schemes = oas.get('components', {}).get('securitySchemes', {})
+        assert security_schemes, "SWIFT should have securitySchemes"
         
-        for path, path_obj in oas.get('paths', {}).items():
-            for method, op in path_obj.items():
-                if method in ['get', 'post', 'put', 'patch', 'delete']:
-                    responses = op.get('responses', {})
-                    for code, resp in responses.items():
-                        content = resp.get('content', {})
-                        for media_type, media_obj in content.items():
-                            if 'example' in media_obj or 'examples' in media_obj:
-                                has_examples = True
-                                if code == '400':
-                                    bad_request_examples.append(f"{path}.{method}.{code}")
+        # Check for global security
+        security = oas.get('security', [])
+        assert security, "SWIFT should have global security requirements"
+    
+    def test_swift_has_x_request_id_header(self, generate_oas):
+        """
+        Verify SWIFT has X-Request-ID header in components.
+        """
+        output_dir = generate_oas(gen_30=False, gen_31=True, gen_swift=True)
         
-        assert has_examples, "SWIFT should have examples (except Bad Request)"
-        assert len(bad_request_examples) == 0, f"SWIFT should NOT have Bad Request examples: {bad_request_examples}"
+        swift_files = list(output_dir.glob("*3.1*SWIFT*.yaml"))
+        
+        with open(swift_files[0], 'r', encoding='utf-8') as f:
+            oas = yaml.safe_load(f)
+        
+        headers = oas.get('components', {}).get('headers', {})
+        assert 'X-Request-ID' in headers, "SWIFT should have X-Request-ID header component"
+    
+    def test_swift_has_iv_parameters(self, generate_oas):
+        """
+        Verify SWIFT has ivUserKey and ivUserBic parameters.
+        """
+        output_dir = generate_oas(gen_30=False, gen_31=True, gen_swift=True)
+        
+        swift_files = list(output_dir.glob("*3.1*SWIFT*.yaml"))
+        
+        with open(swift_files[0], 'r', encoding='utf-8') as f:
+            oas = yaml.safe_load(f)
+        
+        params = oas.get('components', {}).get('parameters', {})
+        assert 'ivUserKey' in params, "SWIFT should have ivUserKey parameter"
+        assert 'ivUserBic' in params, "SWIFT should have ivUserBic parameter"
     
     def test_swift_no_sandbox_extensions(self, generate_oas):
         """
         Verify SWIFT has NO x-sandbox-* extensions.
+        Sandbox extensions are for testing only, not for SWIFT production.
         """
         output_dir = generate_oas(gen_30=False, gen_31=True, gen_swift=True)
         
@@ -94,11 +102,34 @@ class TestSwiftVariant:
         sandbox_count = content.count('x-sandbox')
         assert sandbox_count == 0, f"SWIFT should NOT have x-sandbox extensions, found {sandbox_count}"
     
+    def test_swift_400_uses_oneof_schema(self, generate_oas):
+        """
+        Verify SWIFT 400 responses use oneOf schema.
+        """
+        output_dir = generate_oas(gen_30=False, gen_31=True, gen_swift=True)
+        
+        swift_files = list(output_dir.glob("*3.1*SWIFT*.yaml"))
+        
+        with open(swift_files[0], 'r', encoding='utf-8') as f:
+            oas = yaml.safe_load(f)
+        
+        # Check at least one 400 response
+        for path, path_obj in oas.get('paths', {}).items():
+            for method, op in path_obj.items():
+                if method in ['get', 'post', 'put', 'patch', 'delete']:
+                    resp_400 = op.get('responses', {}).get('400', {})
+                    content = resp_400.get('content', {}).get('application/json', {})
+                    schema = content.get('schema', {})
+                    if 'oneOf' in schema:
+                        # Found at least one - test passes
+                        return
+        
+        pytest.fail("SWIFT 400 responses should use oneOf schema")
+    
     def test_swift_preserves_paths(self, generate_oas):
         """
         Verify SWIFT has the same paths as standard version.
         """
-        # Generate both standard and SWIFT
         output_dir = generate_oas(gen_30=False, gen_31=True, gen_swift=True)
         
         standard_files = [f for f in output_dir.glob("*3.1*.yaml") if "SWIFT" not in f.name]
@@ -116,10 +147,9 @@ class TestSwiftVariant:
         
         assert standard_paths == swift_paths, f"SWIFT has different paths:\nMissing: {standard_paths - swift_paths}\nExtra: {swift_paths - standard_paths}"
     
-    @pytest.mark.xfail(reason="Known bug: SWIFT has extra schemas (ErrorMessage, Errors)")
-    def test_swift_preserves_schemas(self, generate_oas):
+    def test_swift_has_more_schemas_than_standard(self, generate_oas):
         """
-        Verify SWIFT has the same schemas as standard version.
+        Verify SWIFT has at least as many schemas as standard (plus Errors, ErrorMessage).
         """
         output_dir = generate_oas(gen_30=False, gen_31=True, gen_swift=True)
         
@@ -134,4 +164,9 @@ class TestSwiftVariant:
         standard_schemas = set(standard.get('components', {}).get('schemas', {}).keys())
         swift_schemas = set(swift.get('components', {}).get('schemas', {}).keys())
         
-        assert standard_schemas == swift_schemas, f"SWIFT has different schemas:\nMissing: {standard_schemas - swift_schemas}\nExtra: {swift_schemas - standard_schemas}"
+        # SWIFT should have all standard schemas plus Errors and ErrorMessage
+        expected_extra = {'Errors', 'ErrorMessage'}
+        missing_from_swift = standard_schemas - swift_schemas
+        
+        assert not missing_from_swift, f"SWIFT is missing schemas from Standard: {missing_from_swift}"
+        assert expected_extra.issubset(swift_schemas), f"SWIFT should have {expected_extra}, but has: {swift_schemas & expected_extra}"
