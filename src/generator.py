@@ -31,6 +31,8 @@ from src.generator_pkg.response_builder import (
     flatten_subtree as _flatten_subtree_fn,
     build_schema_from_flat_table as _build_schema_from_flat_table_fn,
     build_examples_from_rows as _build_examples_from_rows_fn,
+    process_response_headers as _process_response_headers_fn,
+    process_response_content as _process_response_content_fn,
 )
 
 
@@ -329,116 +331,16 @@ class OASGenerator:
         return _extract_response_description_fn(df, root_node, self._get_description, self._get_parent)
 
     def _process_response_headers(self, header_nodes):
-        """
-        Processes header nodes into OAS headers dict.
-        Handles both header component refs and schema refs.
-        """
-        if not header_nodes:
-            return None
-
-        headers = {}
-        for h_node in header_nodes:
-            row = h_node["row"]
-            h_name = h_node["name"]
-            schema_ref = self._get_schema_name(row)
-
-            if pd.notna(schema_ref):
-                schema_ref = str(schema_ref).strip()
-                if schema_ref in self.oas["components"]["headers"]:
-                    headers[h_name] = {"$ref": f"#/components/headers/{schema_ref}"}
-                else:
-                    headers[h_name] = {
-                        "schema": {"$ref": f"#/components/schemas/{schema_ref}"},
-                        "description": self._get_description(row) or "",
-                    }
-            else:
-                h_schema = self._map_type_to_schema(row)
-                h_desc = h_schema.pop("description", None)
-                head_obj = {"schema": h_schema}
-                if h_desc:
-                    head_obj["description"] = h_desc
-                headers[h_name] = head_obj
-
-        return headers
+        """Delegate to response_builder.process_response_headers."""
+        return _process_response_headers_fn(
+            header_nodes, self.oas["components"]["headers"], self.version
+        )
 
     def _process_response_content(self, content_nodes, schema_nodes, root_node):
-        """
-        Processes content nodes (explicit) or schema nodes (implicit) into OAS content dict.
-        Returns content dict or None.
-        """
-        if content_nodes:
-            content = {}
-            for c_node in content_nodes:
-                content_type = c_node["name"]
-
-                # Split children into schema vs examples
-                c_schema_nodes = []
-                c_example_nodes = []
-                for grand in c_node["children"]:
-                    sec = (
-                        str(self._get_col_value(grand["row"], ["Section"]))
-                        .strip()
-                        .lower()
-                    )
-                    if sec in ["example", "examples"]:
-                        c_example_nodes.append(grand)
-                    else:
-                        c_schema_nodes.append(grand)
-
-                # Build schema (include parent node for proper hierarchy)
-                all_schema_rows = [c_node["row"]] + [
-                    n["row"] for n in self._flatten_subtree(c_schema_nodes)
-                ]
-                c_schema_df = pd.DataFrame(all_schema_rows)
-
-                if not c_schema_df.empty:
-                    schema = self._build_schema_from_flat_table(c_schema_df)
-                else:
-                    schema = {}
-
-                # Build examples
-                examples = {}
-                if c_example_nodes:
-                    ex_df = pd.DataFrame(
-                        [n["row"] for n in self._flatten_subtree(c_example_nodes)]
-                    )
-                    examples = self._build_examples_from_rows(ex_df)
-
-                # Suppress schema for empty objects if no attributes
-                c_type = str(self._get_type(c_node["row"])).strip().lower()
-                has_attributes = len(c_schema_nodes) > 0
-
-                if c_type == "object" and not has_attributes:
-                    content_entry = {}
-                else:
-                    content_entry = {"schema": schema}
-
-                if examples:
-                    content_entry["examples"] = {}
-                    for k, v in examples.items():
-                        if isinstance(v, dict) and "value" in v:
-                            content_entry["examples"][k] = v
-                        else:
-                            content_entry["examples"][k] = {"value": v}
-
-                content[content_type] = content_entry
-
-            return content
-
-        elif schema_nodes:
-            # Implicit content (legacy)
-            default_ct = "application/json"
-            if "/" in root_node["name"]:
-                default_ct = root_node["name"]
-
-            schema_df = pd.DataFrame(
-                [n["row"] for n in self._flatten_subtree(schema_nodes)]
-            )
-            schema = self._build_schema_from_flat_table(schema_df)
-
-            return {default_ct: {"schema": schema}}
-
-        return None
+        """Delegate to response_builder.process_response_content."""
+        return _process_response_content_fn(
+            content_nodes, schema_nodes, root_node, self.version
+        )
 
     def _build_single_response(self, df, body_examples=None, code=""):
         """
