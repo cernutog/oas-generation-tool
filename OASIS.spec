@@ -23,8 +23,10 @@ hiddenimports = [
     'tkinter', 
     'src', 'src.gui', 'src.main', 'src.redoc_gen', 'src.linter', 'src.charts', 
     'src.preferences', 'src.preferences_dialog', 'src.doc_viewer', 'src.generator', 'src.excel_parser',
+    'src.splash_screen',  # OASIS splash screen
     'webview', 'chlorophyll', 'pygments', 'pygments.lexers', 'tklinenums', 'tkinterweb', 
-    'pygetwindow', 'pyrect'
+    'pygetwindow', 'pyrect',
+    'PIL', 'PIL.Image', 'PIL.ImageTk',  # Pillow for splash screen images
 ]
 tmp_ret = collect_all('customtkinter')
 datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
