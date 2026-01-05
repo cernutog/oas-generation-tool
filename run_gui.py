@@ -22,7 +22,7 @@ if __name__ == "__main__":
     # Show splash screen and load app
     try:
         from src.splash_screen import show_splash_and_load_app
-        app = show_splash_and_load_app()
+        app = show_splash_and_load_app(debug_mode=True)  # Wait for click
     except ImportError:
         # Fallback: direct import without splash
         import customtkinter as ctk
