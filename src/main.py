@@ -90,6 +90,26 @@ def generate_oas(
     else:
         gen_dir = output_dir
 
+    # Output Map Directory and Cleanup
+    map_dir = os.path.join(gen_dir, ".oasis_excel_maps")
+    os.makedirs(map_dir, exist_ok=True)
+
+    # Cleanup Orphan Maps
+    try:
+        for map_file in os.listdir(map_dir):
+            if map_file.endswith(".map.json"):
+                # derived from assumptions: name + .map.json
+                parent_yaml_name = map_file.replace(".map.json", "")
+                parent_yaml_path = os.path.join(gen_dir, parent_yaml_name)
+                if not os.path.exists(parent_yaml_path):
+                    try:
+                        os.remove(os.path.join(map_dir, map_file))
+                        log_callback(f"Cleaned up orphan map: {map_file}")
+                    except OSError:
+                        pass
+    except OSError:
+        pass
+
     def build_filename(oas_ver, customization=""):
         pattern = info_data.get("filename_pattern")
         if not pattern or pd.isna(pattern):
@@ -150,7 +170,9 @@ def generate_oas(
                 components_data["securitySchemes"] = {}
             components_data["securitySchemes"].update(security_schemes)
 
-        generator_30.build_components(components_data)
+            components_data["securitySchemes"].update(security_schemes)
+
+        generator_30.build_components(components_data, source_file=os.path.basename(index_path))
         generator_30.build_paths(paths_list, operations_details)
 
         # Ensure OAS output folder exists
@@ -161,6 +183,11 @@ def generate_oas(
         log_callback(f"Writing OAS 3.0 to: {out_30}")
         with open(out_30, "w", encoding="utf-8") as f:
             f.write(generator_30.get_yaml())
+
+        # Write Source Map
+        map_30 = os.path.join(map_dir, fname_30 + ".map.json")
+        with open(map_30, "w", encoding="utf-8") as f:
+            f.write(generator_30.get_source_map_json())
 
     # 5. Generate OAS 3.1
     if gen_31:
@@ -174,7 +201,7 @@ def generate_oas(
         if security_req:
             generator_31.oas["security"] = security_req
 
-        generator_31.build_components(components_data)
+        generator_31.build_components(components_data, source_file=os.path.basename(index_path))
         generator_31.build_paths(paths_list, operations_details)
 
         # Ensure OAS output folder exists
@@ -185,6 +212,11 @@ def generate_oas(
         log_callback(f"Writing OAS 3.1 to: {out_31}")
         with open(out_31, "w", encoding="utf-8") as f:
             f.write(generator_31.get_yaml())
+
+        # Write Source Map
+        map_31 = os.path.join(map_dir, fname_31 + ".map.json")
+        with open(map_31, "w", encoding="utf-8") as f:
+            f.write(generator_31.get_source_map_json())
 
     # 6. Generate SWIFT OAS (Customized)
     if gen_swift:
@@ -205,7 +237,7 @@ def generate_oas(
                 components_data["securitySchemes"] = {}
             components_data["securitySchemes"].update(security_schemes)
 
-        sw_gen_30.build_components(components_data)
+        sw_gen_30.build_components(components_data, source_file=os.path.basename(index_path))
         sw_gen_30.build_paths(paths_list, operations_details)
 
         # APPLY CUSTOMIZATION
@@ -220,6 +252,11 @@ def generate_oas(
         with open(out_sw_30, "w", encoding="utf-8") as f:
             f.write(sw_gen_30.get_yaml())
 
+        # Write Source Map
+        map_sw_30 = os.path.join(map_dir, os.path.basename(out_sw_30) + ".map.json")
+        with open(map_sw_30, "w", encoding="utf-8") as f:
+            f.write(sw_gen_30.get_source_map_json())
+
         # SWIFT OAS 3.1
         log_callback("Generating SWIFT OAS 3.1...")
         sw_gen_31 = OASGenerator(version="3.1.0")
@@ -231,7 +268,7 @@ def generate_oas(
         if security_req:
             sw_gen_31.oas["security"] = security_req
 
-        sw_gen_31.build_components(components_data)
+        sw_gen_31.build_components(components_data, source_file=os.path.basename(index_path))
         sw_gen_31.build_paths(paths_list, operations_details)
 
         # APPLY CUSTOMIZATION
@@ -242,6 +279,11 @@ def generate_oas(
         log_callback(f"Writing OAS 3.1 (SWIFT) to: {out_sw_31}")
         with open(out_sw_31, "w", encoding="utf-8") as f:
             f.write(sw_gen_31.get_yaml())
+        
+        # Write Source Map
+        map_sw_31 = os.path.join(map_dir, os.path.basename(out_sw_31) + ".map.json")
+        with open(map_sw_31, "w", encoding="utf-8") as f:
+            f.write(sw_gen_31.get_source_map_json())
 
     log_callback("Done!")
 

@@ -51,6 +51,13 @@ class OASGenerator:
                 "securitySchemes": {},
             },
         }
+        self.source_map = {}
+
+    def _record_source(self, json_path, filename, sheet_name=None):
+        """Records the source file and sheet for a given OAS path."""
+        if filename:
+            # key: JSON path, value: dict {file: ..., sheet: ...}
+            self.source_map[json_path] = {"file": filename, "sheet": sheet_name}
 
     def build_info(self, info_data):
         self.oas["info"] = copy.deepcopy(info_data)
@@ -150,7 +157,47 @@ class OASGenerator:
 
             op_obj = self._reorder_dict(op_obj, final_order)
 
+            op_obj = self._reorder_dict(op_obj, final_order)
+
             self.oas["paths"][path_url][method] = op_obj
+            
+            self.oas["paths"][path_url][method] = op_obj
+            
+            # Record Source Map (Granular)
+            # 1. Parameters
+            if details.get("parameters") is not None:
+                sheet = details["parameters"].attrs.get("sheet_name")
+                self._record_source(f"paths.{path_url}.{method}.parameters", file_ref, sheet)
+                
+            # 2. Request Body
+            if details.get("body") is not None:
+                 sheet = details["body"].attrs.get("sheet_name")
+                 self._record_source(f"paths.{path_url}.{method}.requestBody", file_ref, sheet)
+                 
+                 # 2.1 Body Examples
+                 if details.get("body_examples") is not None:
+                     ex_sheet = details["body_examples"].attrs.get("sheet_name")
+                     # Assuming application/json for now as per _build_request_body
+                     base_ex_path = f"paths.{path_url}.{method}.requestBody.content.application/json.examples"
+                     self._record_source(base_ex_path, file_ref, ex_sheet)
+
+            # 3. Responses
+            if details.get("responses"):
+                for code, df_resp in details["responses"].items():
+                     sheet = df_resp.attrs.get("sheet_name")
+                     self._record_source(f"paths.{path_url}.{method}.responses.{code}", file_ref, sheet)
+
+            # 4. Root Operation Fallback
+            # Link the operation root to the Parameters sheet (most common entry point) 
+            # or Body if no params.
+            root_sheet = None
+            if details.get("parameters") is not None:
+                root_sheet = details["parameters"].attrs.get("sheet_name")
+            elif details.get("body") is not None:
+                root_sheet = details["body"].attrs.get("sheet_name")
+            # If no params or body, maybe it's just responses? or just metadata.
+            # If root_sheet is None, it will default to just opening the file, which is fine.
+            self._record_source(f"paths.{path_url}.{method}", file_ref, root_sheet)
 
     def _build_parameters(self, df):
         params = []
@@ -442,7 +489,7 @@ class OASGenerator:
         """Delegate to schema_builder.map_type_to_schema."""
         return _map_type_to_schema_fn(row, self.version, is_node)
 
-    def build_components(self, global_components):
+    def build_components(self, global_components, source_file=None):
         """
         Populates self.oas["components"]
         Strictly enforces order: parameters, headers, schemas, responses
@@ -488,6 +535,15 @@ class OASGenerator:
         if global_components.get("schemas") is not None:
             schema_tree = self._build_schema_group(global_components["schemas"])
             self.oas["components"]["schemas"] = schema_tree
+            
+            # Record Source for Schemas
+            if source_file:
+                for schema_name in schema_tree.keys():
+                    # For schemas, we might have specific sheet info if 'schemas' was a DF with attrs
+                    # But here 'schema_tree' is a dict of built schemas.
+                    # 'global_components["schemas"]' IS the dataframe!
+                    sheet_name = global_components["schemas"].attrs.get("sheet_name")
+                    self._record_source(f"components.schemas.{schema_name}", source_file, sheet_name)
 
         # 4. Responses (Global)
         if global_components.get("responses") is not None:
@@ -787,6 +843,10 @@ class OASGenerator:
         yaml_output = self._insert_raw_extensions(yaml_output, ordered_oas)
 
         return yaml_output
+
+    def get_source_map_json(self):
+        """Returns the source map as a JSON string."""
+        return json.dumps(self.source_map, indent=2)
 
     def _recursive_schema_fix(self, obj):
         """
