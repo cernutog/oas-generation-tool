@@ -1,3 +1,12 @@
+import webbrowser
+import shutil
+import difflib
+try:
+    import win32com.client
+    HAS_COM = True
+except ImportError:
+    HAS_COM = False
+
 import customtkinter as ctk
 import tkinter as tk
 from tkinter import filedialog
@@ -165,6 +174,9 @@ class OASGenApp(ctk.CTk):
 
         self.tab_gen = self.tabview.add("Generation")
         self.tab_val = self.tabview.add("Validation")
+        
+        # Bind Ctrl+F globally to the tabview to catch it even if focus is not on text
+        self.bind("<Control-f>", self._handle_global_search)
 
         # ==========================
         # TAB 1: GENERATION
@@ -675,6 +687,17 @@ class OASGenApp(ctk.CTk):
             font=(yaml_font_family, yaml_font_size),
         )
         self.txt_yaml.pack(fill="both", expand=True, padx=2, pady=2)
+        
+        # Bind Ctrl+F for search
+        self.txt_yaml.bind("<Control-f>", self._show_search_dialog)
+        
+        # Override Double-Click Selection to trim punctuation
+        # Using add="+" so we don't prevent Tkinter's default behavior
+        self.txt_yaml.bind("<Double-Button-1>", self._on_yaml_double_click, add="+")
+        
+        # Fix selection anchor before Shift+Arrow keys
+        self.txt_yaml.bind("<Shift-Left>", self._on_shift_left)
+        self.txt_yaml.bind("<Shift-Right>", self._on_shift_right)
 
         # Apply saved theme after initialization
         saved_theme = self.prefs_manager.get("yaml_theme", "oas-dark")
@@ -1267,6 +1290,22 @@ class OASGenApp(ctk.CTk):
 
         # Update Chart - Use code_summary for detailed breakdown
         self.chart.set_data(code_summary)
+        
+        # Load Source Map if available
+        self.current_source_map = {}
+        try:
+            if self.validated_file:
+                # validated_file is just the basename (from checkbox)
+                # We need the full path from self.file_map
+                full_path = self.file_map.get(self.validated_file)
+                if full_path:
+                    dir_name = os.path.dirname(full_path)
+                    map_path = os.path.join(dir_name, ".oasis_excel_maps", self.validated_file + ".map.json")
+                    if os.path.exists(map_path):
+                        with open(map_path, "r", encoding="utf-8") as f:
+                            self.current_source_map = json.load(f)
+        except Exception as e:
+            print(f"Error loading source map: {e}")
 
         # Populate Raw JSON Tab
         raw_data = result.get("raw_data", [])
@@ -1353,6 +1392,34 @@ class OASGenApp(ctk.CTk):
                 )
                 line_btn.pack(side="right")
 
+                # Excel Link (Moved to Header) - "Open Template"
+                if self.current_source_map and item["path"]:
+                     source_info = self._resolve_source_file(item["path"])
+                     if source_info:
+                         # Handle both string (old) and dict (new) format
+                         if isinstance(source_info, dict):
+                             filename = source_info.get("file")
+                             sheetname = source_info.get("sheet")
+                         else:
+                             filename = source_info
+                             sheetname = None
+
+                         if filename:
+                             ctk.CTkButton(
+                                 r1, # Pack in Row 1
+                                 text="Template Sheet",
+                                 height=20,
+                                 width=100,
+                                 fg_color="transparent",
+                                 border_width=1,          # Thinner 1px
+                                 border_color="#107C41",  # Excel Green
+                                 text_color="#107C41",    
+                                 hover_color="#E6F2EA",  
+                                 font=("Arial", 10, "bold"),
+                                 corner_radius=4,
+                                 command=lambda f=filename, s=sheetname: self._open_excel_file(f, s)
+                             ).pack(side="right", padx=5)
+
                 # Row 2: Path
                 if item["path"] and item["path"] != "Root":
                     path_color = ("#555555", "#AAAAAA")
@@ -1376,6 +1443,10 @@ class OASGenApp(ctk.CTk):
                     font=("Arial", 11),
                     text_color=("#333333", "#FFFFFF") # Standard text color
                 ).pack(fill="x", padx=5, pady=(0, 5))
+
+                # Excel Link removed from here (Moved to Header)
+
+
 
         # Refresh markers in View tab if viewing the same file
         current_view_file = (
@@ -1591,7 +1662,17 @@ class OASGenApp(ctk.CTk):
             # Apply validation markers if this is the validated file
             self._apply_validation_markers(os.path.basename(filepath))
 
-            self.txt_yaml.config(state="disabled")
+            # READ-ONLY MODE WITH CURSOR
+            # To show cursor, state must be normal. We block edits via binding.
+            self.txt_yaml.config(state="normal")
+            
+            # Unbind previous block if any (to avoid stacking) - though bind replaces by default for same sequence
+            self.txt_yaml.bind("<Key>", self._on_yaml_key_press)
+            # Bind Double Click to fix cursor position
+            self.txt_yaml.bind("<Double-Button-1>", self._on_yaml_double_click)
+            
+            # We specifically want to allow Copy (Ctrl+C) and Select All (Ctrl+A) and Navigation
+            # This is handled in _on_yaml_key_press
 
             # Store the current content for browser opening
             self._current_yaml_content = content
@@ -1712,6 +1793,13 @@ class OASGenApp(ctk.CTk):
                     ):
                         # Force unsnap blindly to avoid race conditions or sync lags
                         viewer.set_snap(False)
+                
+                # Restore from maximized state before docking
+                # Maximized windows can't be resized, so we need to un-maximize first
+                if self.state() == "zoomed":
+                    self.state("normal")
+                    self.update_idletasks()  # Process pending geometry changes
+                
                 # Bring main window to front when starting snapped
                 self.lift()
                 self.focus_force()
@@ -2200,6 +2288,464 @@ class OASGenApp(ctk.CTk):
         except Exception as e:
             self.val_log_print(f"Highlight error: {e}")
 
+    def _show_search_dialog(self, event=None):
+        """Show or focus the finding dialog."""
+        # Capture selection BEFORE acting on windows (focus change clears selection)
+        initial_search_text = None
+        try:
+             if self.txt_yaml.tag_ranges("sel"):
+                 initial_search_text = self.txt_yaml.get("sel.first", "sel.last")
+        except:
+             pass
+
+        # Create Search Window if not exists
+        if hasattr(self, "search_window") and self.search_window and self.search_window.winfo_exists():
+            # self.search_window.attributes("-topmost", True) # OSCURA ALTRE APP
+            self.search_window.lift()
+            self.search_window.focus_force()
+            
+            # Dynamic Autofill for existing window
+            if initial_search_text:
+                 self.search_entry.delete(0, "end")
+                 self.search_entry.insert(0, initial_search_text)
+                 self.search_entry.select_range(0, "end")
+                 # Update count relative to current cursor (after short delay for UI)
+                 self.after(50, lambda: self._update_match_count(current_match_start=self.txt_yaml.index("insert")))
+            
+            self.search_entry.focus_set()
+            return
+
+        try:
+            self.search_window = ctk.CTkToplevel(self)
+            self.search_window.title("Find")
+            self.search_window.geometry("450x60")
+            self.search_window.resizable(False, False)
+            # self.search_window.attributes("-topmost", True) # OSCURA ALTRE APP
+            
+            # Icon
+            try:
+                icon_file = resource_path("icon.ico")
+                if os.path.exists(icon_file):
+                    self.search_window.after(200, lambda: self.search_window.iconbitmap(icon_file))
+            except:
+                pass
+
+            # Position logic
+            try:
+                print("DEBUG: Calculating geometry")
+                parent_x = self.winfo_x()
+                parent_y = self.winfo_y()
+                parent_w = self.winfo_width()
+                x = parent_x + (parent_w // 2) - 225
+                y = parent_y + 100 
+                self.search_window.geometry(f"+{x}+{y}")
+            except Exception as e:
+                print(f"DEBUG: Geometry error: {e}")
+
+            # UI Container
+            frame = ctk.CTkFrame(self.search_window, fg_color="transparent")
+            frame.pack(fill="both", expand=True, padx=10, pady=10)
+            
+            # Grid Layout: [Entry][Hist] [Count] [Prev] [Next]
+            frame.grid_columnconfigure(0, weight=1)
+            
+            # 1. Search Entry (Standard Entry for stability)
+            self.search_entry = ctk.CTkEntry(
+                frame, 
+                placeholder_text="Find...", 
+                height=28
+            )
+            self.search_entry.grid(row=0, column=0, sticky="ew", padx=(0, 2))
+            
+            # History Button (Dropdown style)
+            self.btn_history = ctk.CTkButton(
+                frame,
+                text="▼",
+                width=24,
+                height=28,
+                fg_color="transparent",
+                text_color=("gray10", "gray90"),
+                hover_color=("gray70", "gray30"),
+                command=self._show_history_menu
+            )
+            self.btn_history.grid(row=0, column=1, padx=(0, 5))
+
+            # Bindings
+            self.search_entry.bind("<Return>", lambda e: self._find_next())
+            self.search_entry.bind("<Shift-Return>", lambda e: self._find_prev())
+            self.search_entry.bind("<KeyRelease>", self._on_search_key_release)
+            
+            # 2. Count Label
+            self.lbl_search_count = ctk.CTkLabel(frame, text="0/0", width=60, text_color="gray60")
+            self.lbl_search_count.grid(row=0, column=2, padx=(0, 5))
+
+            # 3. Buttons (Icon style)
+            btn_prev = ctk.CTkButton(
+                frame, 
+                text="▲", 
+                width=30, 
+                height=28,
+                command=self._find_prev
+            )
+            btn_prev.grid(row=0, column=3, padx=(0, 2))
+
+            btn_next = ctk.CTkButton(
+                frame, 
+                text="▼", 
+                width=30, 
+                height=28,
+                command=self._find_next
+            )
+            btn_next.grid(row=0, column=4)
+            
+            # Pre-fill (Initial)
+            if initial_search_text:
+                 self.search_entry.insert(0, initial_search_text) 
+                 self.search_entry.select_range(0, "end")
+                 # Trigger initial count safely with DEBOUNCE and CURSOR POS
+                 # Using "insert" gives us the cursor location to find the "current" match index
+                 self.after(500, lambda: self._update_match_count(current_match_start=self.txt_yaml.index("insert")))
+
+            # Safe focus
+            def safe_focus():
+                try:
+                    if hasattr(self.search_entry, "_entry"):
+                        self.search_entry._entry.focus_set()
+                    else:
+                        self.search_entry.focus_set()
+                except:
+                    pass
+            
+            self.after(100, safe_focus)
+            
+        except Exception as e:
+            self.val_log_print(f"Error creating search dialog: {e}")
+            if hasattr(self, "search_window") and self.search_window:
+                self.search_window.destroy()
+                self.search_window = None
+
+    def _on_yaml_double_click(self, event):
+        """Trim punctuation from double-click selection without interfering with Tkinter's selection mechanics."""
+        def trim_punctuation():
+            try:
+                # Check if there's a selection from the double-click
+                if not self.txt_yaml.tag_ranges("sel"):
+                    return
+                
+                start = self.txt_yaml.index("sel.first")
+                end = self.txt_yaml.index("sel.last")
+                text = self.txt_yaml.get(start, end)
+                
+                # Trim trailing punctuation
+                original_end = end
+                while text and text[-1] in ":\",'.]":
+                    text = text[:-1]
+                    end = self.txt_yaml.index(f"{end}-1c")
+                
+                # Re-apply the selection if we trimmed something
+                if end != original_end:
+                    self.txt_yaml.tag_remove("sel", "1.0", "end")
+                    self.txt_yaml.tag_add("sel", start, end)
+                
+                # ALWAYS set cursor to END so Shift+Left contracts from right
+                self.txt_yaml.mark_set("insert", end)
+            except:
+                pass
+        
+        # Schedule this to run after Tkinter's default double-click has completed
+        # Don't return "break" - let Tkinter handle the double-click normally
+        self.after(1, trim_punctuation)
+
+    def _on_shift_left(self, event):
+        """Handle Shift+Left: contract from right, or expand left when cursor at start."""
+        try:
+            if not self.txt_yaml.tag_ranges("sel"):
+                return  # No selection, let default behavior handle it
+            
+            start = self.txt_yaml.index("sel.first")
+            end = self.txt_yaml.index("sel.last")
+            insert = self.txt_yaml.index("insert")
+            
+            # If cursor is at start of selection, expand to the left
+            if self.txt_yaml.compare(insert, "==", start):
+                new_start = self.txt_yaml.index(f"{start}-1c")
+                self.txt_yaml.tag_remove("sel", "1.0", "end")
+                self.txt_yaml.tag_add("sel", new_start, end)
+                self.txt_yaml.mark_set("insert", new_start)
+            # Otherwise shrink from the right
+            elif self.txt_yaml.compare(end, ">", start):
+                new_end = self.txt_yaml.index(f"{end}-1c")
+                self.txt_yaml.tag_remove("sel", "1.0", "end")
+                self.txt_yaml.tag_add("sel", start, new_end)
+                self.txt_yaml.mark_set("insert", new_end)
+            
+            return "break"
+            
+        except:
+            pass
+    
+    def _on_shift_right(self, event):
+        """Handle Shift+Right: contract from left, or expand right when cursor at end."""
+        try:
+            if not self.txt_yaml.tag_ranges("sel"):
+                return  # No selection, let default behavior handle it
+            
+            start = self.txt_yaml.index("sel.first")
+            end = self.txt_yaml.index("sel.last")
+            insert = self.txt_yaml.index("insert")
+            
+            # If cursor is at start of selection, contract from the left
+            if self.txt_yaml.compare(insert, "==", start):
+                if self.txt_yaml.compare(start, "<", end):  # Don't contract past end
+                    new_start = self.txt_yaml.index(f"{start}+1c")
+                    self.txt_yaml.tag_remove("sel", "1.0", "end")
+                    self.txt_yaml.tag_add("sel", new_start, end)
+                    self.txt_yaml.mark_set("insert", new_start)
+            # Otherwise expand to the right
+            else:
+                new_end = self.txt_yaml.index(f"{end}+1c")
+                self.txt_yaml.tag_remove("sel", "1.0", "end")
+                self.txt_yaml.tag_add("sel", start, new_end)
+                self.txt_yaml.mark_set("insert", new_end)
+            
+            return "break"
+            
+        except:
+            pass
+
+    def _on_search_key_release(self, event):
+        """Update match count on typing."""
+        # Debounce slightly could be good, but simple is fine for now
+        self._update_match_count()
+
+    def _update_match_count(self, current_match_start=None):
+        """Count all occurrences and identify current index."""
+        if current_match_start is None:
+            try:
+                current_match_start = self.txt_yaml.index("insert")
+            except:
+                pass
+                
+        if not hasattr(self, "lbl_search_count") or not self.lbl_search_count.winfo_exists():
+            return
+            
+        query = self.search_entry.get()
+        if not query:
+            self.lbl_search_count.configure(text="0/0")
+            return
+            
+        # Count matches
+        try:
+            matches = []
+            start = "1.0"
+            max_count = 100 # Safety limit to prevent freezing on large files/many matches
+            
+            while True:
+                pos = self.txt_yaml.search(query, start, stopindex="end", nocase=True)
+                if not pos:
+                    break
+                matches.append(pos)
+                start = f"{pos}+1c"
+                
+                if len(matches) >= max_count:
+                    break
+            
+            total = len(matches)
+            current = 0
+            
+            if current_match_start:
+                 # Find which match corresponds to current_match_start
+                 # Robust logic: The "current" match is the LAST match that starts BEFORE (or at) the cursor.
+                 # This handles cases where user deletes char from search query:
+                 # Query: "Foo" -> Cursor at end of "Foo".
+                 # User deletes "o" -> Query: "Fo". Match ends before cursor.
+                 # But we still want this to be the "current" match.
+                 
+                 found_current = False
+                 for i, pos in enumerate(matches):
+                     # If start of match is > cursor, then we passed our candidate
+                     if self.txt_yaml.compare(pos, ">", current_match_start):
+                         break
+                     
+                     # Otherwise, this match is a candidate (starts before or at cursor)
+                     # We keep updating 'current' until we find one that is strictly after
+                     current = i + 1
+                     found_current = True
+                     
+                     # Optimization: If we find a match that explicitly *contains* the cursor, that's definitely it.
+                     # But the "last start <= cursor" logic covers containment too, provided matches are ordered.
+                     # The only edge case is if cursor is way past the match (e.g. standard editing).
+                     # In that case, showing the "previous" match as current is still acceptable/helpful.
+                     
+                 # If we didn't find any match starting before cursor (cursor is at top of doc, matches are below)
+                 # Then current remains 0 (correct, we are before first match)
+            
+            if total == 0:
+                self.lbl_search_count.configure(text="0/0")
+            elif total >= max_count:
+                # Indicate limit reached
+                prefix = f"{current}/" if current > 0 else "?/"
+                self.lbl_search_count.configure(text=f"{prefix}{max_count}+")
+            else:
+                prefix = f"{current}/" if current > 0 else "?/"
+                self.lbl_search_count.configure(text=f"{prefix}{total}")
+
+        except Exception as e:
+            print(f"Count error: {e}")
+            self.lbl_search_count.configure(text="Err")
+            
+    def _show_history_menu(self):
+        """Show search history in a native menu."""
+        try:
+            history = self.prefs_manager.get("search_history", [])
+            if not history:
+                return
+                
+            menu = tk.Menu(self, tearoff=0)
+            
+            def load_search(text):
+                self.search_entry.delete(0, "end")
+                self.search_entry.insert(0, text)
+                self._find_next()
+                
+            for item in history:
+                if item:
+                    menu.add_command(label=str(item), command=lambda t=item: load_search(t))
+            
+            # Post menu under button
+            try:
+                x = self.btn_history.winfo_rootx()
+                y = self.btn_history.winfo_rooty() + self.btn_history.winfo_height()
+                menu.post(x, y)
+            except:
+                menu.post(self.winfo_pointerx(), self.winfo_pointery())
+                
+                
+        except Exception as e:
+            print(f"History menu error: {e}")
+
+    def _add_to_search_history(self, query):
+        """Add query to history if new."""
+        if not query: 
+            return
+            
+        history = self.prefs_manager.get("search_history", [])
+        # Ensure list
+        if not isinstance(history, list):
+             history = []
+             
+        if query in history:
+            history.remove(query) # Move to top
+        history.insert(0, query)
+        
+        # Limit to 20
+        history = history[:20]
+        self.prefs_manager.set("search_history", history)
+        self.prefs_manager.save()
+        
+        # Update combo
+        self.search_entry.configure(values=history)
+
+    def _handle_global_search(self, event=None):
+        """Handle Ctrl+F globally - only if View tab is active."""
+        if self.tabview.get() == "View":
+            self._show_search_dialog()
+            return "break" # Stop propagation
+
+    def _on_yaml_key_press(self, event):
+        """Handle key presses in YAML viewer to enforce read-only but allow navigation/copy."""
+        # Allow navigation keys
+        if event.keysym in ["Up", "Down", "Left", "Right", "Home", "End", "Next", "Prior"]:
+            return None
+            
+        # Allow Ctrl+C, Ctrl+A (Copy, Select All)
+        # event.state check: 4 is Control (on Windows/Linux usually), but typically implicit in event.keysym if modifier used?
+        # Actually standard check is (event.state & 0x0004) or similar.
+        # Simpler: Check event.keysym with strict binding or let through if ctrl is held?
+        # Let's rely on common blocked keys.
+        
+        # Block modification keys
+        if event.char and len(event.char) > 0 and ord(event.char) >= 32:
+             # Check for Control modifier (Bit 2 normally)
+             # If Control is pressed, allow (e.g. Ctrl+C)
+             if event.state & 0x4: 
+                 return None
+             return "break"
+             
+        if event.keysym in ["BackSpace", "Delete", "Return", "Tab"]:
+            return "break"
+            
+        return None
+        
+    def _find_prev(self, event=None):
+        """Find previous occurrence."""
+        self._find_next(backwards=True)
+
+    def _find_next(self, event=None, backwards=False):
+        """Find next (or prev) occurrence of text in YAML viewer."""
+        query = self.search_entry.get()
+        if not query:
+            return
+
+        # Remove previous highlight
+        self.txt_yaml.tag_remove("found", "1.0", "end")
+        
+        # Start search from insert cursor
+        start_pos = self.txt_yaml.index("insert")
+        
+        # Perform Search
+        # Perform Search
+        if backwards:
+            # Search backwards from cursor
+            # If we are currently at a match, we need to move back 1 char or else we find same match
+            start_search = self.txt_yaml.index(f"{start_pos}-1c")
+            
+            pos = self.txt_yaml.search(query, start_search, stopindex="1.0", backwards=True, nocase=True)
+            
+            if not pos: # Wrap to end
+                 pos = self.txt_yaml.search(query, "end", stopindex="1.0", backwards=True, nocase=True)
+        else:
+            # Search forwards
+            pos = self.txt_yaml.search(query, start_pos, stopindex="end", nocase=True)
+            
+            # If stuck on same match (because search starts AT index)
+            if pos and self.txt_yaml.compare(pos, "==", start_pos):
+                 pos = self.txt_yaml.search(query, f"{start_pos}+1c", stopindex="end", nocase=True)
+
+            if not pos: # Wrap to start
+                 pos = self.txt_yaml.search(query, "1.0", stopindex="end", nocase=True)
+
+        if pos:
+            # Calculate end position
+            length = len(query)
+            end_pos = f"{pos}+{length}c"
+            
+            # Highlight
+            self.txt_yaml.tag_add("found", pos, end_pos)
+            self.txt_yaml.tag_config("found", background="#FFFF00", foreground="#000000")
+            self.txt_yaml.tag_raise("found")
+            
+            # Scroll to show
+            self.txt_yaml.see(pos)
+            
+            # Move cursor to start of match (so next search continues from there? No, from end for fwd, start for back)
+            if backwards:
+                 self.txt_yaml.mark_set("insert", pos)
+            else:
+                 self.txt_yaml.mark_set("insert", end_pos)
+                 
+            # Update Count with current index
+            self._update_match_count(current_match_start=pos)
+            
+            # Add to history
+            self._add_to_search_history(query)
+            
+        else:
+            # Not found
+            self._update_match_count()
+            pass
+
+
     def _on_close(self):
         """Handle window close event."""
         # Save window geometry
@@ -2217,6 +2763,121 @@ class OASGenApp(ctk.CTk):
         # Close main window
         self.destroy()
         sys.exit(0)
+
+    def _resolve_source_file(self, json_path):
+        """
+        Attempts to find the source Excel file for a given OAS path.
+        Traverses up the path keys if exact match is not found.
+        """
+        if not json_path:
+            return None
+            
+        # Standardize path: Linter uses " > ", Map uses "."
+        # Note: Paths like /v1/foo are preserved as single segments if we just string replace
+        # But wait, 2.0 > /v1/foo > post
+        # If we replace " > " with "." we get paths./v1/foo.post which matches the map key!
+        clean_path = json_path.replace(" > ", ".")
+        clean_path = clean_path.replace("Root.", "") # Just in case
+        
+        keys = clean_path.split(".")
+        
+        # Try full path first, then parent, etc.
+        while keys:
+            current_path = ".".join(keys)
+            if current_path in self.current_source_map:
+                return self.current_source_map[current_path]
+            keys.pop() # Remove last segment
+            
+        return None
+
+    def _open_excel_file(self, filename, sheetname=None):
+        """Opens the specified Excel file, optionally navigating to a sheet."""
+        # Need to find the full path. 
+        # Strategy: Look in the Template Directory (self.entry_dir)
+        template_dir = self.entry_dir.get()
+        if not template_dir or not os.path.exists(template_dir):
+             tk.messagebox.showerror("Error", "Template directory is not set or valid.")
+             return
+
+        # Simple search in the template directory
+        target_path = None
+        
+        # 1. Exact Match
+        for root, dirs, files in os.walk(template_dir):
+            if filename in files:
+                target_path = os.path.join(root, filename)
+                break
+        
+        # 2. Try with extensions if not found
+        if not target_path:
+            candidates = []
+            for root, dirs, files in os.walk(template_dir):
+                for f in files:
+                    candidates.append(f)
+                    # Check if filename + .xlsm or .xlsx matches
+                    if f == filename + ".xlsm" or f == filename + ".xlsx":
+                        target_path = os.path.join(root, f)
+                        break
+                if target_path:
+                    break
+            
+            # 3. Fuzzy Match if still not found
+            if not target_path:
+                 # Gather all files in a flat list for fuzzy matching
+                 all_files = []
+                 file_to_path = {}
+                 for root, dirs, files in os.walk(template_dir):
+                     for f in files:
+                         if f.endswith(".xlsm") or f.endswith(".xlsx"):
+                             all_files.append(f)
+                             file_to_path[f] = os.path.join(root, f)
+                 
+                 # Fuzzy search
+                 matches = difflib.get_close_matches(filename, all_files, n=1, cutoff=0.6)
+                 if matches:
+                     print(f"Fuzzy matched '{filename}' to '{matches[0]}'")
+                     target_path = file_to_path[matches[0]]
+        
+        if target_path:
+            try:
+                if HAS_COM and sheetname:
+                    # Use COM to open specific sheet
+                    try:
+                        excel = win32com.client.Dispatch("Excel.Application")
+                        excel.Visible = True
+                        wb = excel.Workbooks.Open(target_path)
+                        # Find sheet
+                        try:
+                            ws = wb.Sheets(sheetname)
+                            ws.Activate()
+                        except Exception:
+                            print(f"Sheet {sheetname} not found.")
+                        
+                        # Bring to front (Aggressive)
+                        try:
+                            # 1. Windows specific focus
+                            import ctypes
+                            excel_hwnd = excel.Hwnd
+                            if excel_hwnd:
+                                ctypes.windll.user32.SetForegroundWindow(excel_hwnd)
+                            
+                            # 2. Excel internal State
+                            excel.Visible = True
+                            excel.WindowState = -4143 # xlNormal
+                            excel.WindowState = -4137 # xlMaximized
+                        except:
+                            pass
+                            
+                    except Exception as e:
+                         print(f"COM Error, falling back to os.startfile: {e}")
+                         os.startfile(target_path)
+                else:
+                    # Fallback or standard open
+                    os.startfile(target_path)
+            except Exception as e:
+                tk.messagebox.showerror("Error", f"Could not open file: {e}")
+        else:
+             tk.messagebox.showerror("Error", f"File '{filename}' not found in Template Directory.")
 
 
 if __name__ == "__main__":
